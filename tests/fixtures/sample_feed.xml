@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Flux d'exemple</title>
+    <link>https://example.invalid/</link>
+    <description>Flux RSS de test, hors réseau.</description>
+    <item>
+      <title>Premier article de test</title>
+      <link>https://example.invalid/articles/premier</link>
+      <guid>https://example.invalid/articles/premier</guid>
+      <pubDate>Fri, 24 Jul 2026 10:00:00 GMT</pubDate>
+      <description>Résumé du premier article de test.</description>
+    </item>
+    <item>
+      <title>Deuxième article de test</title>
+      <link>https://example.invalid/articles/deuxieme</link>
+      <guid>https://example.invalid/articles/deuxieme</guid>
+      <pubDate>Fri, 24 Jul 2026 12:30:00 GMT</pubDate>
+      <description>Résumé du deuxième article de test.</description>
+    </item>
+  </channel>
+</rss>

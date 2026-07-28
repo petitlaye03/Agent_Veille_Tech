@@ -1,0 +1,6 @@
+sources:
+  - id: openai-news
+    type: rss
+    url: https://openai.com/news/rss.xml
+    langue: en
+    registre: ce_qui_bouge

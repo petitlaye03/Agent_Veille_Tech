@@ -1,0 +1,42 @@
+# Secrets — jamais versionnés (AD-10)
+.env
+.env.*
+!.env.example
+
+# Environnement virtuel Python
+.venv/
+venv/
+
+# Artefacts Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+# Base de données locale (état du pipeline)
+*.db
+*.sqlite
+*.sqlite3
+
+# Journaux d'exécution
+*.log
+logs/
+
+# Données personnelles — ne pas publier
+CV_*.pdf
+
+# Outillage BMad (réinstallable via `npx bmad-method install`)
+_bmad/
+.claude/
+
+# Artefacts de planification — contiennent du contexte professionnel personnel.
+# À réintégrer délibérément si le dépôt reste privé ou après relecture.
+_bmad-output/
+
+# Systèmes d'exploitation / éditeurs
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
