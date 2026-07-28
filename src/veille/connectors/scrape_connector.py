@@ -11,8 +11,9 @@ chaque build — s'y fier casserait le connecteur en silence.
 """
 
 import logging
+import re
 from datetime import datetime, timezone
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urldefrag, urljoin, urlparse
 from urllib.request import url2pathname
 
 import httpx
@@ -27,8 +28,25 @@ TIMEOUT_SECONDES = 30
 # ASCII uniquement : les en-têtes HTTP n'acceptent pas les caractères accentués.
 USER_AGENT = "veille-ia/0.1 (personal news aggregator)"
 
-# Formats de date rencontrés sur les pages d'actualité, du plus au moins courant.
-FORMATS_DATE = ("%b %d, %Y", "%B %d, %Y", "%Y-%m-%d", "%d %B %Y")
+# Mois anglais résolus par table explicite plutôt que par `%b`/`%B` : ces
+# directives dépendent de la locale du processus, si bien que sur un système
+# en français toutes les dates échoueraient silencieusement et seraient
+# remplacées par l'heure de collecte.
+MOIS_ANGLAIS = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+
+# Formats indépendants de la locale (chiffres uniquement).
+FORMATS_DATE_NUMERIQUES = ("%Y-%m-%d", "%d/%m/%Y", "%Y/%m/%d")
+
+# « Jul 24, 2026 » ou « 24 July 2026 »
+MOTIF_MOIS_JOUR_ANNEE = re.compile(
+    r"(?P<mois>[A-Za-z]{3,9})\.?\s+(?P<jour>\d{1,2})(?:st|nd|rd|th)?,?\s+(?P<annee>\d{4})"
+)
+MOTIF_JOUR_MOIS_ANNEE = re.compile(
+    r"(?P<jour>\d{1,2})\s+(?P<mois>[A-Za-z]{3,9})\.?,?\s+(?P<annee>\d{4})"
+)
 
 
 def fetch(source_config: SourceConfig) -> list[Item]:
@@ -43,13 +61,25 @@ def fetch(source_config: SourceConfig) -> list[Item]:
     items: list[Item] = []
     vus: set[str] = set()
 
+    base = source_config.base_url or source_config.url
+    domaine_attendu = urlparse(base).netloc
+
     for ancre in soup.find_all("a", href=True):
         href = ancre["href"]
         if source_config.selecteur and source_config.selecteur not in href:
             continue
 
-        url = urljoin(source_config.base_url, href)
-        if url in vus:
+        url = urljoin(base, href)
+
+        # Un lien externe peut contenir le motif sans être un article de la
+        # source : ne jamais attribuer à celle-ci du contenu d'un autre domaine.
+        if domaine_attendu and urlparse(url).netloc != domaine_attendu:
+            logger.debug("Lien hors domaine ignoré : %s", url)
+            continue
+
+        # Fragment et barre oblique finale ne distinguent pas deux articles.
+        cle = urldefrag(url)[0].rstrip("/")
+        if cle in vus:
             continue
 
         try:
@@ -61,7 +91,7 @@ def fetch(source_config: SourceConfig) -> list[Item]:
             logger.warning("Lien ignoré (%s) dans '%s'.", href, source_config.id, exc_info=True)
             continue
 
-        vus.add(url)
+        vus.add(cle)
         items.append(item)
 
     if not items:
@@ -125,10 +155,12 @@ def _extraire_titre(ancre) -> str:
             return titre
 
     # Le bloc de métadonnées est identifié par la balise <time> qu'il contient.
+    # Si ce parent est l'ancre elle-même, il n'y a pas de bloc méta distinct :
+    # exclure ses spans reviendrait à tous les écarter, et à perdre le titre.
     horodatage = ancre.find("time")
     bloc_meta = horodatage.find_parent() if horodatage else None
     spans_meta = set()
-    if bloc_meta is not None:
+    if bloc_meta is not None and bloc_meta is not ancre:
         spans_meta = {id(s) for s in bloc_meta.find_all("span")}
 
     for span in ancre.find_all("span"):
@@ -147,19 +179,45 @@ def _extraire_date(ancre) -> datetime:
         return datetime.now(timezone.utc)
 
     # L'attribut datetime, s'il existe, est plus fiable que le texte affiché.
-    brut = balise.get("datetime") or balise.get_text(" ", strip=True)
+    brut = (balise.get("datetime") or balise.get_text(" ", strip=True)).strip()
 
-    for format_date in FORMATS_DATE:
+    # 1. ISO 8601 — l'attribut `datetime` du HTML l'utilise le plus souvent.
+    texte_iso = brut[:-1] + "+00:00" if brut.endswith("Z") else brut
+    try:
+        parsee = datetime.fromisoformat(texte_iso)
+        return (
+            parsee.replace(tzinfo=timezone.utc)
+            if parsee.tzinfo is None
+            else parsee.astimezone(timezone.utc)
+        )
+    except ValueError:
+        pass
+
+    # 2. Formats numériques, insensibles à la locale.
+    for format_date in FORMATS_DATE_NUMERIQUES:
         try:
             return datetime.strptime(brut, format_date).replace(tzinfo=timezone.utc)
         except ValueError:
             continue
 
-    try:
-        return datetime.fromisoformat(brut.replace("Z", "+00:00")).astimezone(timezone.utc)
-    except ValueError:
-        logger.debug("Date illisible (%r) — horodatage à la collecte.", brut)
-        return datetime.now(timezone.utc)
+    # 3. Mois écrits en toutes lettres, résolus sans dépendre de la locale.
+    for motif in (MOTIF_MOIS_JOUR_ANNEE, MOTIF_JOUR_MOIS_ANNEE):
+        trouve = motif.search(brut)
+        if not trouve:
+            continue
+        mois = MOIS_ANGLAIS.get(trouve.group("mois")[:3].lower())
+        if mois is None:
+            continue
+        try:
+            return datetime(
+                int(trouve.group("annee")), mois, int(trouve.group("jour")),
+                tzinfo=timezone.utc,
+            )
+        except ValueError:
+            continue
+
+    logger.debug("Date illisible (%r) — horodatage à la collecte.", brut)
+    return datetime.now(timezone.utc)
 
 
 def _extraire_extrait(ancre) -> str:

@@ -11,7 +11,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any
 from urllib.request import url2pathname
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import httpx
 
@@ -80,40 +80,72 @@ def _resoudre_chemin(donnees: Any, chemin: str) -> Any:
     return courant
 
 
+def _champ(entree: dict, mapping: dict, nom: str) -> Any:
+    """Résout un champ déclaré dans le mapping.
+
+    Un champ absent du mapping vaut `None` — surtout pas l'entrée entière,
+    ce que renverrait `_resoudre_chemin` avec un chemin vide.
+    """
+    chemin = mapping.get(nom)
+    if not chemin:
+        return None
+    return _resoudre_chemin(entree, chemin)
+
+
 def _to_item(entree: dict, source_config: SourceConfig) -> Item:
     mapping = source_config.mapping
 
-    guid = _resoudre_chemin(entree, mapping.get("guid", ""))
-    if not guid:
+    guid = _champ(entree, mapping, "guid")
+    # `0` et `False` sont des identifiants légitimes : ne rejeter que l'absence
+    # réelle et la chaîne vide.
+    if guid is None or guid == "":
         raise ValueError("entrée sans identifiant exploitable")
+    if isinstance(guid, (dict, list)):
+        raise ValueError(f"identifiant non scalaire : {type(guid).__name__}")
 
     guid = str(guid)
-    url = (
-        source_config.url_modele.format(guid=guid)
-        if source_config.url_modele
-        else str(_resoudre_chemin(entree, mapping.get("url", "")) or "")
-    )
+    if source_config.url_modele:
+        try:
+            url = source_config.url_modele.format(guid=quote(guid, safe=""))
+        except (KeyError, IndexError, ValueError) as e:
+            raise ValueError(f"gabarit d'URL invalide : {e}") from e
+    else:
+        url = str(_champ(entree, mapping, "url") or "")
 
     return Item(
         source_id=source_config.id,
         guid=guid,
-        titre=str(_resoudre_chemin(entree, mapping.get("titre", "")) or ""),
-        date_publication=_to_utc_datetime(
-            _resoudre_chemin(entree, mapping.get("date_publication", ""))
-        ),
+        titre=str(_champ(entree, mapping, "titre") or ""),
+        date_publication=_to_utc_datetime(_champ(entree, mapping, "date_publication")),
         langue=source_config.langue,
         registre=source_config.registre,
         url=url,
-        contenu_brut=str(_resoudre_chemin(entree, mapping.get("contenu_brut", "")) or ""),
+        contenu_brut=str(_champ(entree, mapping, "contenu_brut") or ""),
     )
 
 
 def _to_utc_datetime(valeur: Any) -> datetime:
-    """Normalise une date ISO 8601 en datetime UTC timezone-aware."""
-    if not valeur:
+    """Normalise une date en datetime UTC timezone-aware.
+
+    Accepte l'ISO 8601 et les horodatages Unix (secondes ou millisecondes),
+    plusieurs API exposant l'un ou l'autre.
+    """
+    if valeur is None or valeur == "":
         return datetime.now(timezone.utc)
 
-    texte = str(valeur).replace("Z", "+00:00")
+    if isinstance(valeur, (int, float)) and not isinstance(valeur, bool):
+        # Au-delà de ce seuil, la valeur est en millisecondes.
+        secondes = valeur / 1000 if valeur > 1e11 else valeur
+        try:
+            return datetime.fromtimestamp(secondes, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            logger.warning("Horodatage hors limites (%r).", valeur)
+            return datetime.now(timezone.utc)
+
+    texte = str(valeur)
+    # Ne remplacer le « Z » qu'en fin de chaîne : il peut apparaître ailleurs.
+    if texte.endswith("Z"):
+        texte = texte[:-1] + "+00:00"
     try:
         parsee = datetime.fromisoformat(texte)
     except ValueError:

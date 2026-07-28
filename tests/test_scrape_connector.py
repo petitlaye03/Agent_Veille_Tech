@@ -71,6 +71,74 @@ def test_une_entree_sans_titre_exploitable_est_ignoree():
     assert not any("entree-degradee" in item.url for item in items)
 
 
+def test_titre_trouve_meme_si_time_est_enfant_direct_de_l_ancre(tmp_path):
+    """Sans div méta intermédiaire, l'exclusion ne doit pas emporter tous les spans."""
+    page = tmp_path / "time_direct.html"
+    page.write_text(
+        '<a href="/news/x"><time>Jul 24, 2026</time>'
+        "<span>Le vrai titre</span></a>",
+        encoding="utf-8",
+    )
+
+    source = SourceConfig(
+        id="s", type="scrape", url=page.as_uri(), langue="en",
+        registre="ce_qui_bouge", selecteur="/news/", base_url="https://exemple.invalid",
+    )
+
+    items = fetch(source)
+
+    assert len(items) == 1
+    assert items[0].titre == "Le vrai titre"
+
+
+def test_les_dates_sont_lues_independamment_de_la_locale(tmp_path, monkeypatch):
+    """Sur un système en français, les mois anglais doivent rester lisibles."""
+    import locale as locale_module
+
+    page = tmp_path / "date.html"
+    page.write_text(
+        '<a href="/news/x"><h2>Titre</h2><time>Jul 24, 2026</time></a>',
+        encoding="utf-8",
+    )
+    source = SourceConfig(
+        id="s", type="scrape", url=page.as_uri(), langue="en",
+        registre="ce_qui_bouge", selecteur="/news/", base_url="https://exemple.invalid",
+    )
+
+    try:
+        locale_module.setlocale(locale_module.LC_TIME, "fr_FR")
+    except locale_module.Error:
+        import pytest
+
+        pytest.skip("locale fr_FR indisponible sur cette machine")
+
+    try:
+        items = fetch(source)
+        assert items[0].date_publication.year == 2026
+        assert items[0].date_publication.month == 7
+        assert items[0].date_publication.day == 24
+    finally:
+        locale_module.setlocale(locale_module.LC_TIME, "C")
+
+
+def test_les_liens_hors_domaine_sont_ecartes(tmp_path):
+    """Un lien externe contenant le motif ne doit pas être ingéré comme article."""
+    page = tmp_path / "externe.html"
+    page.write_text(
+        '<a href="https://site-tiers.invalid/news/piege"><h2>Piège</h2></a>'
+        '<a href="/news/legitime"><h2>Article légitime</h2></a>',
+        encoding="utf-8",
+    )
+    source = SourceConfig(
+        id="s", type="scrape", url=page.as_uri(), langue="en",
+        registre="ce_qui_bouge", selecteur="/news/", base_url="https://exemple.invalid",
+    )
+
+    items = fetch(source)
+
+    assert [i.titre for i in items] == ["Article légitime"]
+
+
 def test_page_sans_lien_correspondant_retourne_liste_vide(tmp_path):
     page = tmp_path / "vide.html"
     page.write_text("<html><body><p>Rien à collecter ici.</p></body></html>", encoding="utf-8")
