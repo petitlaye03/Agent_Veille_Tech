@@ -10,17 +10,20 @@ import logging
 from pathlib import Path
 
 from veille.config import SourceConfig, load_sources
-from veille.connectors import rss_connector
+from veille.connectors import json_connector, rss_connector, scrape_connector
 from veille.models import Item
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_SOURCES_PATH = Path("config/sources.yaml")
 
-# Dispatch par type de source. Ajouter un connecteur (API JSON, scraping)
-# ne modifie que cette table, jamais la boucle d'orchestration ci-dessous.
+# Dispatch par type de source. Ajouter un connecteur ne modifie que cette
+# table, jamais la boucle d'orchestration ci-dessous ; ajouter une source
+# d'un type déjà présent ne modifie aucun code, seulement la configuration.
 CONNECTORS = {
     "rss": rss_connector.fetch,
+    "json": json_connector.fetch,
+    "scrape": scrape_connector.fetch,
 }
 
 

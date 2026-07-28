@@ -31,7 +31,7 @@ Quelques décisions structurantes :
 ## État d'avancement
 
 - [x] **Story 1.1** — collecte d'une première source RSS, modèle d'item canonique, isolation de panne
-- [ ] Story 1.2 — sources API et scrapées derrière la même interface
+- [x] **Story 1.2** — connecteurs API JSON et scraping derrière la même interface
 - [ ] Story 1.3 — dédoublonnage inter-sources
 - [ ] Stories 1.4-1.6 — filtrage, scoring par profil, quotas par section
 - [ ] Stories 1.7-1.9 — accroches en français, publication, archive
@@ -53,15 +53,40 @@ uv run python -m veille.collect  # collecte les sources de config/sources.yaml
 
 ## Configuration
 
-Les sources vivent dans `config/sources.yaml` — aucune modification de code n'est nécessaire pour en ajouter ou en retirer :
+Les sources vivent dans `config/sources.yaml` — aucune modification de code n'est nécessaire pour en ajouter ou en retirer. Trois types sont disponibles :
 
 ```yaml
 sources:
+  # Flux RSS/Atom
   - id: openai-news
     type: rss
     url: https://openai.com/news/rss.xml
     langue: en
     registre: ce_qui_bouge
+
+  # API JSON — la forme de l'API est décrite en configuration,
+  # pas codée en dur : brancher une autre API n'exige aucun code.
+  - id: hf-daily-papers
+    type: json
+    url: https://huggingface.co/api/daily_papers?limit=50
+    langue: en
+    registre: apprendre
+    mapping:
+      guid: paper.id
+      titre: title
+      date_publication: publishedAt
+      contenu_brut: paper.summary
+    url_modele: https://huggingface.co/papers/{guid}
+
+  # Scraping — réservé aux sources sans flux ni API,
+  # et uniquement lorsque le robots.txt l'autorise.
+  - id: anthropic-news
+    type: scrape
+    url: https://www.anthropic.com/news
+    langue: en
+    registre: ce_qui_bouge
+    selecteur: /news/
+    base_url: https://www.anthropic.com
 ```
 
 ## Tests

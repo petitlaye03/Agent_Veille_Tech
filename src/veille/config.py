@@ -5,8 +5,9 @@ retirer une source ne doit jamais nécessiter de modifier ce module.
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -15,13 +16,33 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class SourceConfig:
-    """Descripteur d'une source déclarée dans `sources.yaml`."""
+    """Descripteur d'une source déclarée dans `sources.yaml`.
+
+    Les cinq premiers champs sont communs à tous les types de source. Les
+    suivants sont optionnels et propres à certains types : ils permettent
+    de brancher une nouvelle source par configuration seule (AD-3), sans
+    écrire de code.
+    """
 
     id: str
     type: str
     url: str
     langue: str
     registre: str
+
+    # --- Spécifique aux sources JSON ---
+    # Chemin vers la liste d'items dans la réponse (vide = la racine est la liste).
+    racine: str = ""
+    # Correspondance champ_item -> chemin pointé dans la charge utile.
+    mapping: dict[str, Any] = field(default_factory=dict)
+    # Gabarit d'URL construit à partir des champs extraits, ex. ".../{guid}".
+    url_modele: str = ""
+
+    # --- Spécifique aux sources scrapées ---
+    # Motif que doit contenir un lien pour être retenu, ex. "/news/".
+    selecteur: str = ""
+    # Racine servant à résoudre les liens relatifs en URL absolues.
+    base_url: str = ""
 
 
 def load_sources(path: str | Path) -> list[SourceConfig]:

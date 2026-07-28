@@ -1,0 +1,20 @@
+[
+  {
+    "title": "A Vocabulary for Multi-Agent Automated Research Systems",
+    "publishedAt": "2026-07-12T20:00:00.000Z",
+    "paper": {
+      "id": "2607.22682",
+      "summary": "We introduce a vocabulary for automated research systems built from one or more agents to make their design choices easier to describe and compare. The vocabulary specifies 1) who the agents are, 2) what operations are a",
+      "upvotes": 1
+    }
+  },
+  {
+    "title": "TRACE: Business Rule-Grounded Reasoning Curriculum for Knowledge-Preserving Parametric Tool Retrieval in Enterprise LLMs",
+    "publishedAt": "2026-06-21T20:00:00.000Z",
+    "paper": {
+      "id": "2607.22639",
+      "summary": "Parametric retrieval enables LLMs to retrieve tools implicitly by assigning each API a unique virtual token and training the model to generate it via constrained beam search. Toolsense shows that this regime has two crit",
+      "upvotes": 0
+    }
+  }
+]

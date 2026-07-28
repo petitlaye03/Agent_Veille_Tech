@@ -1,6 +1,47 @@
+# Socle de sources de l'agent de veille.
+#
+# Ajouter ou retirer une source d'un type déjà implémenté ne demande AUCUNE
+# modification de code — seulement une entrée ici (AD-3).
+#
+# Types disponibles : rss | json | scrape
+# Registres         : apprendre | ce_qui_bouge | pour_le_metier
+
 sources:
+  # --- Flux RSS/Atom -------------------------------------------------------
   - id: openai-news
     type: rss
     url: https://openai.com/news/rss.xml
     langue: en
     registre: ce_qui_bouge
+
+  - id: huggingface-blog
+    type: rss
+    url: https://huggingface.co/blog/feed.xml
+    langue: en
+    registre: apprendre
+
+  # --- API JSON ------------------------------------------------------------
+  # Le mapping décrit la forme de l'API : brancher une autre API JSON
+  # (Kaggle, etc.) se fait ici, sans écrire de connecteur supplémentaire.
+  - id: hf-daily-papers
+    type: json
+    url: https://huggingface.co/api/daily_papers?limit=50
+    langue: en
+    registre: apprendre
+    mapping:
+      guid: paper.id
+      titre: title
+      date_publication: publishedAt
+      contenu_brut: paper.summary
+    url_modele: https://huggingface.co/papers/{guid}
+
+  # --- Scraping ------------------------------------------------------------
+  # Anthropic n'expose aucun flux officiel. robots.txt vérifié le 2026-07-28 :
+  # « User-Agent: * / Allow: / » — collecte autorisée (AD-10).
+  - id: anthropic-news
+    type: scrape
+    url: https://www.anthropic.com/news
+    langue: en
+    registre: ce_qui_bouge
+    selecteur: /news/
+    base_url: https://www.anthropic.com
