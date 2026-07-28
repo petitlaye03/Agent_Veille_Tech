@@ -17,6 +17,7 @@ from pathlib import Path
 
 from veille.config import SourceConfig, load_sources
 from veille.connectors import json_connector, rss_connector, scrape_connector
+from veille.dedup import RapportDedoublonnage, dedupliquer
 from veille.models import Item
 
 logger = logging.getLogger(__name__)
@@ -59,6 +60,7 @@ class ResultatCollecte:
 
     items: list[Item] = field(default_factory=list)
     rapports: list[RapportSource] = field(default_factory=list)
+    dedoublonnage: RapportDedoublonnage = field(default_factory=RapportDedoublonnage)
 
     @property
     def sources_en_echec(self) -> list[RapportSource]:
@@ -73,7 +75,10 @@ class ResultatCollecte:
         if not self.rapports:
             return "Aucune source configurée."
 
-        lignes = [f"Collecte : {len(self.items)} item(s) depuis {len(self.rapports)} source(s)"]
+        entete = f"Collecte : {len(self.items)} item(s) depuis {len(self.rapports)} source(s)"
+        if self.dedoublonnage.total_ecartes:
+            entete += f", après {self.dedoublonnage.total_ecartes} doublon(s) écarté(s)"
+        lignes = [entete]
         for rapport in sorted(self.rapports, key=lambda r: -r.nb_items):
             if rapport.echec:
                 etat = f"ÉCHEC — {rapport.echec}"
@@ -125,7 +130,13 @@ def collecter(sources_path: str | Path = DEFAULT_SOURCES_PATH) -> ResultatCollec
             )
         )
 
-    resultat = ResultatCollecte(items=items, rapports=rapports)
+    items, rapport_dedup = dedupliquer(
+        items, priorites={s.id: s.priorite for s in sources}
+    )
+
+    resultat = ResultatCollecte(
+        items=items, rapports=rapports, dedoublonnage=rapport_dedup
+    )
     _journaliser(resultat)
     return resultat
 

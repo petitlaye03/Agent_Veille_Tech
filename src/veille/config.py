@@ -30,6 +30,11 @@ class SourceConfig:
     langue: str
     registre: str
 
+    # Départage le dédoublonnage : à article identique, la source de plus
+    # haute priorité l'emporte. Utile pour préférer une source primaire
+    # (blog de laboratoire) à un agrégateur qui la relaie.
+    priorite: int = 0
+
     # --- Spécifique aux sources JSON ---
     # Chemin vers la liste d'items dans la réponse (vide = la racine est la liste).
     racine: str = ""

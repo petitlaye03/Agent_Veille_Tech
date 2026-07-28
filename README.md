@@ -32,7 +32,7 @@ Quelques décisions structurantes :
 
 - [x] **Story 1.1** — collecte d'une première source RSS, modèle d'item canonique, isolation de panne
 - [x] **Story 1.2** — connecteurs API JSON et scraping derrière la même interface
-- [ ] Story 1.3 — dédoublonnage inter-sources
+- [x] **Story 1.3** — dédoublonnage inter-sources, priorité de source déclarative
 - [ ] Stories 1.4-1.6 — filtrage, scoring par profil, quotas par section
 - [ ] Stories 1.7-1.9 — accroches en français, publication, archive
 - [ ] Epic 2 — socle élargi et robustesse aux pannes
