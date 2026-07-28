@@ -13,6 +13,7 @@ chaque build — s'y fier casserait le connecteur en silence.
 import logging
 import re
 from datetime import datetime, timezone
+from urllib import robotparser
 from urllib.parse import urldefrag, urljoin, urlparse
 from urllib.request import url2pathname
 
@@ -40,6 +41,12 @@ MOIS_ANGLAIS = {
 # Formats indépendants de la locale (chiffres uniquement).
 FORMATS_DATE_NUMERIQUES = ("%Y-%m-%d", "%d/%m/%Y", "%Y/%m/%d")
 
+# Libellés d'appel à l'action à ne pas confondre avec un chapeau d'article.
+LONGUEUR_MIN_EXTRAIT = 30
+LIBELLES_ACTION = frozenset(
+    {"read more", "lire la suite", "en savoir plus", "learn more", "read", "more"}
+)
+
 # « Jul 24, 2026 » ou « 24 July 2026 »
 MOTIF_MOIS_JOUR_ANNEE = re.compile(
     r"(?P<mois>[A-Za-z]{3,9})\.?\s+(?P<jour>\d{1,2})(?:st|nd|rd|th)?,?\s+(?P<annee>\d{4})"
@@ -52,9 +59,21 @@ MOTIF_JOUR_MOIS_ANNEE = re.compile(
 def fetch(source_config: SourceConfig) -> list[Item]:
     """Récupère une page HTML et en extrait des `Item` canoniques.
 
+    Le `robots.txt` de la cible est consulté avant toute collecte (AD-10) :
+    une source ajoutée par configuration ne doit jamais pouvoir contourner
+    ce garde-fou.
+
     Une entrée sans titre exploitable est ignorée : mieux vaut perdre une
     ligne que publier un item vide.
     """
+    if not _collecte_autorisee(source_config.url):
+        logger.warning(
+            "robots.txt interdit la collecte de '%s' (%s) — source ignorée (AD-10).",
+            source_config.id,
+            source_config.url,
+        )
+        return []
+
     html = _charger(source_config.url)
     soup = BeautifulSoup(html, "html.parser")
 
@@ -103,6 +122,35 @@ def fetch(source_config: SourceConfig) -> list[Item]:
     return items
 
 
+def _collecte_autorisee(url: str) -> bool:
+    """Consulte le `robots.txt` du domaine cible (AD-10).
+
+    En cas de `robots.txt` absent ou injoignable, la collecte est autorisée —
+    c'est le comportement standard. Un `robots.txt` présent et restrictif,
+    lui, est respecté.
+    """
+    decoupe = urlparse(url)
+    if decoupe.scheme not in ("http", "https"):
+        return True  # fichier local (tests) : rien à consulter
+
+    robots_url = f"{decoupe.scheme}://{decoupe.netloc}/robots.txt"
+    try:
+        reponse = httpx.get(
+            robots_url,
+            timeout=TIMEOUT_SECONDES,
+            follow_redirects=True,
+            headers={"User-Agent": USER_AGENT},
+        )
+        if reponse.status_code >= 400:
+            return True  # pas de robots.txt : collecte autorisée par défaut
+        lecteur = robotparser.RobotFileParser()
+        lecteur.parse(reponse.text.splitlines())
+        return lecteur.can_fetch(USER_AGENT, url)
+    except Exception:  # noqa: BLE001 — un robots.txt injoignable ne bloque pas
+        logger.debug("robots.txt injoignable pour %s — collecte autorisée.", robots_url)
+        return True
+
+
 def _charger(url: str) -> str:
     """Lit la page, depuis le réseau ou depuis un fichier local (tests)."""
     if url.startswith("file://"):
@@ -135,7 +183,7 @@ def _to_item(ancre, url: str, source_config: SourceConfig) -> Item:
         langue=source_config.langue,
         registre=source_config.registre,
         url=url,
-        contenu_brut=_extraire_extrait(ancre),
+        contenu_brut=_extraire_extrait(ancre, titre),
     )
 
 
@@ -220,6 +268,18 @@ def _extraire_date(ancre) -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _extraire_extrait(ancre) -> str:
-    balise = ancre.find("p")
-    return balise.get_text(" ", strip=True) if balise else ""
+def _extraire_extrait(ancre, titre: str = "") -> str:
+    """Extrait le chapeau, en écartant les libellés d'appel à l'action.
+
+    Le premier `<p>` n'est pas toujours le chapeau : certaines cartes
+    placent un « Read more » avant lui. On retient le premier paragraphe
+    substantiel qui n'est ni un libellé court, ni une répétition du titre.
+    """
+    for balise in ancre.find_all("p"):
+        texte = balise.get_text(" ", strip=True)
+        if not texte or texte == titre:
+            continue
+        if len(texte) < LONGUEUR_MIN_EXTRAIT and texte.lower().rstrip(" .›→»") in LIBELLES_ACTION:
+            continue
+        return texte
+    return ""
