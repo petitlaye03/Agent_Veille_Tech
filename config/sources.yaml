@@ -5,16 +5,27 @@
 #
 # Types disponibles : rss | json | scrape
 # Registres         : apprendre | ce_qui_bouge | pour_le_metier
+#
+# priorite (optionnel, défaut 0) — départage le dédoublonnage : quand deux
+# sources relaient le même article, celle de plus haute priorité l'emporte.
+# Échelle en vigueur :
+#   10  source primaire — l'éditeur publie sa propre actualité
+#    5  curation — sélectionne et met en avant du contenu tiers
+#    0  agrégateur — relaie l'actualité d'autrui (défaut)
+# Le but : à annonce identique, garder la source d'origine plutôt que
+# celui qui la reprend.
 
 sources:
   # --- Flux RSS/Atom -------------------------------------------------------
   - id: openai-news
+    priorite: 10
     type: rss
     url: https://openai.com/news/rss.xml
     langue: en
     registre: ce_qui_bouge
 
   - id: huggingface-blog
+    priorite: 10
     type: rss
     url: https://huggingface.co/blog/feed.xml
     langue: en
@@ -24,6 +35,7 @@ sources:
   # Le mapping décrit la forme de l'API : brancher une autre API JSON
   # (Kaggle, etc.) se fait ici, sans écrire de connecteur supplémentaire.
   - id: hf-daily-papers
+    priorite: 5
     type: json
     url: https://huggingface.co/api/daily_papers?limit=50
     langue: en
@@ -39,6 +51,7 @@ sources:
   # Anthropic n'expose aucun flux officiel. robots.txt vérifié le 2026-07-28 :
   # « User-Agent: * / Allow: / » — collecte autorisée (AD-10).
   - id: anthropic-news
+    priorite: 10
     type: scrape
     url: https://www.anthropic.com/news
     langue: en

@@ -11,6 +11,7 @@ distingue trois états — collectée, muette (zéro item sans erreur), en éche
 """
 
 import logging
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -40,18 +41,34 @@ CONNECTORS = {
 
 @dataclass(frozen=True)
 class RapportSource:
-    """Ce qu'une source a réellement produit pendant un run."""
+    """Ce qu'une source a réellement produit pendant un run.
+
+    Deux comptes distincts, parce qu'ils répondent à deux questions
+    différentes : ce que la source a **collecté**, et ce qui a **survécu**
+    au dédoublonnage pour atteindre le digest.
+    """
 
     source_id: str
     type: str
     nb_items: int
+    nb_retenus: int = 0
     nb_dates_approximatives: int = 0
     echec: str = ""
 
     @property
     def est_muette(self) -> bool:
-        """Zéro item sans erreur — le mode de panne le plus insidieux."""
+        """N'a rien collecté du tout, sans erreur — panne insidieuse."""
         return not self.echec and self.nb_items == 0
+
+    @property
+    def est_absorbee(self) -> bool:
+        """A collecté, mais rien n'a atteint le digest.
+
+        Une source entièrement absorbée par le dédoublonnage n'apporte
+        rien : c'est soit un doublon intégral d'une autre, soit un tri
+        excessif. Dans les deux cas, il faut le voir.
+        """
+        return not self.echec and self.nb_items > 0 and self.nb_retenus == 0
 
 
 @dataclass(frozen=True)
@@ -70,28 +87,49 @@ class ResultatCollecte:
     def sources_muettes(self) -> list[RapportSource]:
         return [r for r in self.rapports if r.est_muette]
 
+    @property
+    def sources_absorbees(self) -> list[RapportSource]:
+        return [r for r in self.rapports if r.est_absorbee]
+
     def resume(self) -> str:
-        """Récapitulatif lisible, anomalies en évidence."""
+        """Récapitulatif lisible et autosuffisant, anomalies en évidence.
+
+        Les colonnes indiquent la contribution **au digest**, et le détail
+        du dédoublonnage figure ici plutôt que dans un journal séparé : le
+        récapitulatif doit se lire seul.
+        """
         if not self.rapports:
             return "Aucune source configurée."
 
         entete = f"Collecte : {len(self.items)} item(s) depuis {len(self.rapports)} source(s)"
         if self.dedoublonnage.total_ecartes:
-            entete += f", après {self.dedoublonnage.total_ecartes} doublon(s) écarté(s)"
+            collectes = sum(r.nb_items for r in self.rapports)
+            entete += (
+                f" — {collectes} collecté(s), "
+                f"{self.dedoublonnage.total_ecartes} doublon(s) écarté(s)"
+            )
         lignes = [entete]
-        for rapport in sorted(self.rapports, key=lambda r: -r.nb_items):
+
+        for rapport in sorted(self.rapports, key=lambda r: (-r.nb_retenus, -r.nb_items)):
             if rapport.echec:
                 etat = f"ÉCHEC — {rapport.echec}"
             elif rapport.est_muette:
                 etat = "MUETTE — aucun item, sans erreur"
+            elif rapport.est_absorbee:
+                etat = f"ABSORBÉE — {rapport.nb_items} collecté(s), 0 retenu(s)"
             else:
-                etat = f"{rapport.nb_items} item(s)"
+                etat = f"{rapport.nb_retenus} item(s)"
+                if rapport.nb_retenus != rapport.nb_items:
+                    etat += f" ({rapport.nb_items} collecté(s))"
                 if rapport.nb_dates_approximatives:
                     etat += (
                         f" (dont {rapport.nb_dates_approximatives} "
                         "sans date exploitable)"
                     )
             lignes.append(f"  {rapport.source_id:22s} [{rapport.type:6s}] {etat}")
+
+        if self.dedoublonnage.total_ecartes:
+            lignes.append(f"  {self.dedoublonnage.resume()}")
 
         return "\n".join(lignes)
 
@@ -115,24 +153,31 @@ def collecter(sources_path: str | Path = DEFAULT_SOURCES_PATH) -> ResultatCollec
 
     debut = datetime.now(timezone.utc)
     items: list[Item] = []
-    rapports: list[RapportSource] = []
+    collecte_par_source: list[tuple[SourceConfig, list[Item], str]] = []
 
     for source_config in sources:
         items_source, echec = _fetch_one(source_config)
         items.extend(items_source)
-        rapports.append(
-            RapportSource(
-                source_id=source_config.id,
-                type=source_config.type,
-                nb_items=len(items_source),
-                nb_dates_approximatives=_compter_dates_approximatives(items_source, debut),
-                echec=echec,
-            )
-        )
+        collecte_par_source.append((source_config, items_source, echec))
 
     items, rapport_dedup = dedupliquer(
         items, priorites={s.id: s.priorite for s in sources}
     )
+
+    # Contribution réelle au digest, une fois les doublons écartés.
+    retenus_par_source = Counter(item.source_id for item in items)
+
+    rapports = [
+        RapportSource(
+            source_id=source_config.id,
+            type=source_config.type,
+            nb_items=len(items_source),
+            nb_retenus=retenus_par_source.get(source_config.id, 0),
+            nb_dates_approximatives=_compter_dates_approximatives(items_source, debut),
+            echec=echec,
+        )
+        for source_config, items_source, echec in collecte_par_source
+    ]
 
     resultat = ResultatCollecte(
         items=items, rapports=rapports, dedoublonnage=rapport_dedup
@@ -195,6 +240,14 @@ def _journaliser(resultat: ResultatCollecte) -> None:
             "Source '%s' muette : aucun item, sans erreur — structure de la "
             "source probablement modifiée.",
             rapport.source_id,
+        )
+
+    for rapport in resultat.sources_absorbees:
+        logger.warning(
+            "Source '%s' absorbée : %d item(s) collecté(s), aucun retenu après "
+            "dédoublonnage — doublon intégral d'une autre source, ou tri excessif.",
+            rapport.source_id,
+            rapport.nb_items,
         )
 
     for rapport in resultat.rapports:

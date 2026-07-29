@@ -77,3 +77,14 @@ def test_les_sources_scrape_declarent_selecteur_et_base_url(socle):
     for source in (s for s in socle if s.type == "scrape"):
         assert source.selecteur, f"{source.id} : `selecteur` absent"
         assert source.base_url, f"{source.id} : `base_url` absent"
+
+
+def test_chaque_source_declare_une_priorite(socle):
+    """Sans priorité déclarée, le dédoublonnage retomberait sur l'ordre du
+    fichier — un comportement que réordonner le YAML changerait en silence."""
+    sans_priorite = [s.id for s in socle if s.priorite == 0]
+
+    assert not sans_priorite, (
+        f"sources sans priorité explicite : {sans_priorite} — "
+        "le départage du dédoublonnage serait alors implicite"
+    )
