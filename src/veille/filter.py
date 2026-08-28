@@ -165,6 +165,12 @@ class Ponderations:
     # Score en dessous duquel un item est écarté, pas seulement rétrogradé.
     seuil_bruit: float = -5.0
 
+    # Écart minimal entre le meilleur score du jour et le second pour que
+    # l'entrée soit recommandée (Story 1.7, FR-8). Même ordre de grandeur
+    # qu'une seule correspondance `prioritaire` : se démarquer d'un bruit de
+    # mesure, pas d'un simple thème de plus.
+    marge_recommandation: float = 10.0
+
 
 def charger_ponderations(chemin: str | Path = DEFAULT_SCORING_PATH) -> Ponderations:
     """Lit `config/scoring.yaml`. Ne lève jamais : un fichier absent,
@@ -218,25 +224,45 @@ def charger_ponderations(chemin: str | Path = DEFAULT_SCORING_PATH) -> Ponderati
     valeurs = {}
     for nom in ("prioritaire", "signal_fort", "domaine", "secondaire", "bruit"):
         valeurs[nom] = _ponderation(categories, nom, getattr(defauts, nom), chemin)
+    # `seuil_bruit` et `marge_recommandation` vivent à la racine du fichier,
+    # pas sous `ponderations:` — ce sont des seuils globaux de comparaison,
+    # pas des pondérations par catégorie (Story 1.7).
     valeurs["seuil_bruit"] = _ponderation(
         brut, "seuil_bruit", defauts.seuil_bruit, chemin
+    )
+    valeurs["marge_recommandation"] = _ponderation(
+        brut,
+        "marge_recommandation",
+        defauts.marge_recommandation,
+        chemin,
+        positif_strict=True,
     )
     return Ponderations(**valeurs)
 
 
-def _ponderation(source: dict, nom: str, defaut: float, chemin) -> float:
+def _ponderation(
+    source: dict, nom: str, defaut: float, chemin, positif_strict: bool = False
+) -> float:
     """Lit une pondération, en retombant sur son défaut si elle est inutilisable.
 
     Le repli est **par valeur** et non global : une seule faute de frappe ne
     doit pas faire perdre les autres réglages du fichier. `nan` est rejeté
     en particulier — toute comparaison à `nan` étant fausse, un `seuil_bruit`
     à `nan` viderait le digest sans le moindre avertissement.
+
+    `positif_strict` (Story 1.7, trouvé en revue — unanime sur les 3 couches) :
+    `marge_recommandation` n'a de sens que strictement positive — à `0`,
+    `premier.score.valeur - second.score.valeur >= 0` est toujours vrai
+    (`classement` est trié décroissant), donc une marge nulle romprait la
+    garantie d'AC2 (« égalité jamais recommandée ») en recommandant quelqu'un
+    tous les jours. `bruit`/`seuil_bruit` restent volontairement exclus de ce
+    contrôle : eux sont légitimement négatifs.
     """
     if nom not in source:
         return defaut
 
     converti = to_float_fini(source[nom])
-    if converti is None:
+    if converti is None or (positif_strict and converti <= 0):
         logger.warning(
             "Pondération '%s' inutilisable (%r) dans %s — valeur par défaut (%s).",
             nom,

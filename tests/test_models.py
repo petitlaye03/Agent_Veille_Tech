@@ -80,3 +80,19 @@ def test_entree_est_immuable():
 
     with pytest.raises(AttributeError):
         entree.accroche = "Autre chose"
+
+
+# --- Story 1.7 : Entree.recommandee --------------------------------------
+
+
+def test_entree_n_est_pas_recommandee_par_defaut():
+    """Une recommandation ne doit jamais être implicite (AC2, AC3)."""
+    entree = Entree(item=_make_item(), accroche="Accroche.")
+
+    assert entree.recommandee is False
+
+
+def test_entree_peut_etre_declaree_recommandee():
+    entree = Entree(item=_make_item(), accroche="Accroche.", recommandee=True)
+
+    assert entree.recommandee is True

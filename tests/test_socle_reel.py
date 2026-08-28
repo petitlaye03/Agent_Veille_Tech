@@ -6,6 +6,7 @@ gardé par rien. Une clé mal orthographiée y supprime pourtant la source
 entière, silencieusement.
 """
 
+import re
 from pathlib import Path
 
 import pytest
@@ -110,6 +111,19 @@ def test_le_fichier_de_ponderations_existe_et_se_charge():
     assert ponderations.prioritaire > 0
     assert ponderations.bruit < 0
     assert ponderations.signal_fort > ponderations.secondaire
+
+    # `marge_recommandation` (Story 1.7) partage la valeur par défaut du
+    # code (10) : un simple test de valeur ne détecterait pas sa suppression
+    # du fichier (le défaut prendrait silencieusement le relais, exactement
+    # le trou déjà trouvé en revue des Stories 1.4/1.5). On vérifie donc la
+    # présence explicite de la clé dans le fichier réel, pas seulement la
+    # valeur résultante. Ancré en début de ligne (`^`, multiligne) pour ne
+    # pas matcher une ligne mise en commentaire (`# marge_recommandation: 10`)
+    # — un simple test de sous-chaîne s'y laisserait tromper (trouvé en
+    # revue par le Edge Case Hunter).
+    assert re.search(
+        r"^marge_recommandation:", chemin.read_text(encoding="utf-8"), re.MULTILINE
+    )
 
 
 def test_le_fichier_de_quotas_existe_et_se_charge():

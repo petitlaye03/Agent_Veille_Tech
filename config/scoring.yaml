@@ -6,6 +6,11 @@
 #
 # seuil_bruit : score en dessous duquel un item est écarté du digest,
 # pas seulement rétrogradé.
+#
+# marge_recommandation (Story 1.7) : écart minimal entre le meilleur score
+# du jour et le second pour que l'entrée soit recommandée. Aucune
+# recommandation n'est forcée si aucun item ne dépasse le second d'au
+# moins cette marge.
 
 ponderations:
   prioritaire: 10
@@ -15,3 +20,4 @@ ponderations:
   bruit: -20
 
 seuil_bruit: -5
+marge_recommandation: 10

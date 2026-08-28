@@ -11,7 +11,8 @@ import anthropic
 import pytest
 
 from veille.enrich import llm
-from veille.models import Item
+from veille.filter import ItemScore, Ponderations, Score
+from veille.models import Entree, Item
 
 
 @pytest.fixture(autouse=True)
@@ -308,3 +309,135 @@ def test_enrichir_isole_l_echec_d_un_item_sans_perdre_les_autres():
     assert entrees[0].accroche == "Accroche générée."
     assert entrees[1].accroche == "Titre ko"  # repli sur le titre, pas de plantage
     assert entrees[2].accroche == "Accroche générée."
+
+
+# --- Story 1.7 : determiner_recommandation -------------------------------
+
+
+def _is(guid, valeur):
+    return ItemScore(item=_make_item(guid=guid), score=Score(valeur=valeur))
+
+
+def test_determiner_recommandation_quand_la_marge_est_depassee():
+    classement = [_is("a", 30), _is("b", 15), _is("c", 5)]  # 30-15=15 >= marge(10)
+
+    gagnant = llm.determiner_recommandation(classement)
+
+    assert gagnant.item.guid == "a"
+
+
+def test_determiner_recommandation_quand_la_marge_n_est_pas_depassee():
+    classement = [_is("a", 20), _is("b", 15)]  # écart 5 < marge(10)
+
+    assert llm.determiner_recommandation(classement) is None
+
+
+def test_determiner_recommandation_avec_des_scores_egaux():
+    classement = [_is("a", 20), _is("b", 20)]
+
+    assert llm.determiner_recommandation(classement) is None
+
+
+def test_determiner_recommandation_avec_un_seul_item():
+    """Rien à comparer : jamais de recommandation (AC2)."""
+    assert llm.determiner_recommandation([_is("a", 1000)]) is None
+
+
+def test_determiner_recommandation_avec_une_liste_vide():
+    assert llm.determiner_recommandation([]) is None
+
+
+def test_determiner_recommandation_egalite_exacte_a_la_marge_est_recommandee():
+    """`>=`, pas `>` — un écart exactement égal à la marge compte."""
+    classement = [_is("a", 20), _is("b", 10)]  # écart 10 == marge(10)
+
+    gagnant = llm.determiner_recommandation(classement)
+
+    assert gagnant.item.guid == "a"
+
+
+def test_determiner_recommandation_respecte_une_marge_personnalisee():
+    classement = [_is("a", 20), _is("b", 15)]  # écart 5
+
+    assert llm.determiner_recommandation(classement, Ponderations(marge_recommandation=3)) is not None
+    assert llm.determiner_recommandation(classement, Ponderations(marge_recommandation=6)) is None
+
+
+def test_determiner_recommandation_ne_retrie_pas():
+    """Le classement est déjà trié par `classer()` — un ordre non trié en
+    entrée refléterait un appelant fautif, pas quelque chose à corriger ici :
+    la fonction doit utiliser le premier élément tel quel."""
+    # Volontairement non trié : si la fonction retriait, elle choisirait "a".
+    classement = [_is("b", 15), _is("a", 30)]
+
+    gagnant = llm.determiner_recommandation(classement)
+
+    # Sur une entrée non triée, le "premier" (b) ne dépasse pas le second (a)
+    # d'une marge suffisante (15 - 30 < 0) : aucune recommandation.
+    assert gagnant is None
+
+
+# --- Story 1.7 : marquer_recommandation -----------------------------------
+
+
+def _entree_pour(item_score):
+    return Entree(item=item_score.item, accroche=f"Accroche {item_score.item.guid}")
+
+
+def test_marquer_recommandation_marque_la_bonne_entree():
+    classement = [_is("a", 30), _is("b", 15)]
+    entrees = [_entree_pour(is_) for is_ in classement]
+
+    resultat = llm.marquer_recommandation(entrees, classement)
+
+    assert resultat[0].recommandee is True
+    assert resultat[1].recommandee is False
+
+
+def test_marquer_recommandation_sans_gagnant_ne_marque_personne():
+    classement = [_is("a", 20), _is("b", 15)]  # écart < marge
+    entrees = [_entree_pour(is_) for is_ in classement]
+
+    resultat = llm.marquer_recommandation(entrees, classement)
+
+    assert all(not e.recommandee for e in resultat)
+
+
+def test_marquer_recommandation_fonctionne_meme_si_l_ordre_differe():
+    classement = [_is("a", 30), _is("b", 15)]
+    entrees = [_entree_pour(classement[1]), _entree_pour(classement[0])]  # ordre inversé
+
+    resultat = llm.marquer_recommandation(entrees, classement)
+
+    assert resultat[0].recommandee is False  # b
+    assert resultat[1].recommandee is True  # a
+
+
+def test_marquer_recommandation_avec_une_liste_vide_ne_leve_pas():
+    assert llm.marquer_recommandation([], []) == []
+
+
+def test_marquer_recommandation_gagnant_sans_entree_correspondante_ne_leve_pas():
+    """Listes désynchronisées (trouvé en revue — affirmé par la docstring
+    mais jamais exercé) : le gagnant du `classement` ne correspond à aucune
+    `Entree` de `entrees` (aucun `id(entree.item)` égal). La fonction ne
+    doit ni lever, ni marquer qui que ce soit — `entrees` ressort inchangée."""
+    classement = [_is("a", 30), _is("b", 15)]  # "a" gagne largement
+    entrees = [_entree_pour(_is("x", 1)), _entree_pour(_is("y", 1))]  # items différents
+
+    resultat = llm.marquer_recommandation(entrees, classement)
+
+    assert resultat == entrees
+    assert all(not e.recommandee for e in resultat)
+
+
+def test_marquer_recommandation_ne_modifie_pas_les_entrees_non_gagnantes():
+    """`Entree` est frozen : seules de nouvelles instances sont créées, et
+    seulement pour l'entrée gagnante — les autres restent les mêmes objets."""
+    classement = [_is("a", 30), _is("b", 15)]
+    entrees = [_entree_pour(is_) for is_ in classement]
+
+    resultat = llm.marquer_recommandation(entrees, classement)
+
+    assert resultat[1] is entrees[1]  # objet inchangé, pas une copie
+    assert resultat[0] is not entrees[0]  # nouvelle instance (frozen + replace)

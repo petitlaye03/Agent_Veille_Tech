@@ -1,4 +1,4 @@
-"""Frontière LLM unique (AD-7, FR-7).
+"""Frontière LLM unique (AD-7, FR-7/8).
 
 Seul module du projet qui appelle l'API Claude — le modèle et le budget
 sont paramétrés ici, aucune autre partie du code ne doit importer
@@ -8,14 +8,22 @@ retenu, même depuis une source anglophone.
 Coût maîtrisé par construction plutôt que mesuré après coup : prompt court
 (titre + extrait tronqué), `max_tokens` borné, un seul appel par item, pas
 de raisonnement étendu. Cible NFR1 : < 2 €/mois à ~240 accroches/mois.
+
+FR-8 (Story 1.7, `determiner_recommandation`/`marquer_recommandation`) vit
+aussi dans ce module — mais **n'appelle jamais l'API** : la recommandation
+est purement déterministe, basée sur le `Score` déjà calculé par
+`filter.py`. Le coder ailleurs briserait la cohérence de la table de
+couverture de l'architecture (FR-7/8 → `enrich/llm.py`) sans bénéfice.
 """
 
+import dataclasses
 import logging
 import os
 
 import anthropic
 from dotenv import load_dotenv
 
+from veille.filter import ItemScore, Ponderations
 from veille.models import Entree, Item
 
 logger = logging.getLogger(__name__)
@@ -193,4 +201,78 @@ def enrichir(items: list[Item], client: anthropic.Anthropic | None = None) -> li
             accroche=generer_accroche(item, client) or item.titre or "(titre indisponible)",
         )
         for item in items
+    ]
+
+
+def determiner_recommandation(
+    classement: list[ItemScore], ponderations: Ponderations = Ponderations()
+) -> ItemScore | None:
+    """Détermine l'`ItemScore` à recommander, ou `None` si rien ne le justifie.
+
+    Aucun appel API (FR-8, cohérent avec AD-7 : le seul point d'appel LLM
+    reste `generer_accroche`) — purement déterministe, sur le `Score` déjà
+    calculé par `filter.py`.
+
+    Règle : `classement` est supposé déjà trié par score décroissant
+    (`classer()` le fait) — **jamais retrié ici**. L'item recommandé est le
+    premier, à condition qu'il dépasse le second d'au moins
+    `ponderations.marge_recommandation` (AC1). Avec moins de deux items, il
+    n'y a rien à comparer : jamais de recommandation (AC2). Un appelant qui
+    fournirait un classement non trié obtiendrait un résultat non
+    significatif — c'est un contrat sur l'entrée, pas un cas à corriger ici.
+
+    Quel classement passer (précision pour le câblage à venir, Story 1.8,
+    trouvé en revue) : `repartir_par_quotas()`, pas le `classer()` brut. Le
+    gagnant doit correspondre à une `Entree` publiée pour que
+    `marquer_recommandation` puisse le marquer — un item écarté par quota
+    n'a aucune `Entree` à marquer, et cette fonction ne le sait pas : elle
+    compare seulement les deux premiers éléments de ce qu'on lui donne.
+    """
+    if len(classement) < 2:
+        return None
+
+    premier, second = classement[0], classement[1]
+    if premier.score.valeur - second.score.valeur >= ponderations.marge_recommandation:
+        return premier
+    return None
+
+
+def marquer_recommandation(
+    entrees: list[Entree],
+    classement: list[ItemScore],
+    ponderations: Ponderations = Ponderations(),
+) -> list[Entree]:
+    """Marque au plus une `Entree` comme recommandée (AC1, AC2, AC3).
+
+    Fonction additive, appliquée **après** `enrichir()` : ne change ni sa
+    signature ni son comportement, pour préserver intégralement les tests
+    de la Story 1.6. La correspondance entre `entrees` et `classement` se
+    fait par **identité d'objet** (`id(entree.item)`), pas par `guid` —
+    même convention que `rapport_classement`/`rapport_quotas` (`filter.py`).
+
+    Ne lève jamais : si `determiner_recommandation` ne trouve personne, ou
+    si l'item gagnant ne correspond à aucune `Entree` (listes désynchronisées),
+    `entrees` est renvoyée inchangée. `Entree` étant frozen, seule l'entrée
+    gagnante devient une nouvelle instance (`dataclasses.replace`) ; les
+    autres restent les mêmes objets.
+
+    Précondition non vérifiée, même limite que `rapport_classement`/
+    `rapport_quotas` (`filter.py`, Stories 1.4/1.5) dont cette fonction
+    reprend la convention : un même objet `Item` référencé par plusieurs
+    `Entree` de `entrees` les ferait toutes basculer à `True`, au-delà de
+    l'« au plus une » de l'AC3. Non atteignable via `collecter()` —
+    `dedup.py` garantit qu'un `Item` gagnant n'apparaît qu'une fois — donc
+    non corrigé ici ; à traiter si cette fonction est un jour appelée hors
+    de ce chemin (trouvé en revue).
+    """
+    gagnant = determiner_recommandation(classement, ponderations)
+    if gagnant is None:
+        return entrees
+
+    identite_gagnante = id(gagnant.item)
+    return [
+        dataclasses.replace(entree, recommandee=True)
+        if id(entree.item) == identite_gagnante
+        else entree
+        for entree in entrees
     ]

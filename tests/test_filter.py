@@ -313,6 +313,74 @@ def test_charger_ponderations_fichier_malforme_retourne_les_valeurs_par_defaut(t
     assert charger_ponderations(chemin) == Ponderations()
 
 
+# --- Story 1.7 : marge_recommandation ------------------------------------
+
+
+def test_marge_recommandation_par_defaut():
+    assert Ponderations().marge_recommandation == 10.0
+
+
+def test_charger_ponderations_lit_la_marge_de_recommandation(tmp_path):
+    """`marge_recommandation` vit à la racine du fichier, comme `seuil_bruit`
+    — ni l'une ni l'autre n'est une pondération par catégorie."""
+    chemin = tmp_path / "scoring.yaml"
+    chemin.write_text("marge_recommandation: 25\n", encoding="utf-8")
+
+    ponderations = charger_ponderations(chemin)
+
+    assert ponderations.marge_recommandation == 25.0
+    # Le reste garde ses défauts — repli par valeur, pas global.
+    assert ponderations.prioritaire == Ponderations().prioritaire
+
+
+def test_charger_ponderations_marge_invalide_retombe_sur_le_defaut_sans_affecter_le_reste(
+    tmp_path,
+):
+    chemin = tmp_path / "scoring.yaml"
+    chemin.write_text(
+        "marge_recommandation: beaucoup\nponderations:\n  bruit: -99\n", encoding="utf-8"
+    )
+
+    ponderations = charger_ponderations(chemin)
+    defauts = Ponderations()
+
+    assert ponderations.marge_recommandation == defauts.marge_recommandation
+    assert ponderations.bruit == -99
+    # « sans affecter le reste » : vérifié sur tous les autres champs, pas
+    # seulement `bruit` — sinon une régression qui réinitialiserait
+    # `prioritaire`/`signal_fort`/`domaine`/`secondaire`/`seuil_bruit`
+    # passerait inaperçue malgré le nom du test (trouvé en revue).
+    assert ponderations.prioritaire == defauts.prioritaire
+    assert ponderations.signal_fort == defauts.signal_fort
+    assert ponderations.domaine == defauts.domaine
+    assert ponderations.secondaire == defauts.secondaire
+    assert ponderations.seuil_bruit == defauts.seuil_bruit
+
+
+def test_charger_ponderations_marge_recommandation_nulle_retombe_sur_le_defaut(tmp_path):
+    """Une marge de 0 romprait la garantie d'AC2 (« égalité jamais
+    recommandée ») : `premier - second >= 0` est toujours vrai puisque
+    `classement` est trié décroissant — tout jour, même à égalité parfaite,
+    recommanderait quelqu'un. Contrairement à `bruit`/`seuil_bruit`,
+    `marge_recommandation` n'a de sens que strictement positive (trouvé en
+    revue, unanime sur les 3 couches de revue)."""
+    chemin = tmp_path / "scoring.yaml"
+    chemin.write_text("marge_recommandation: 0\n", encoding="utf-8")
+
+    ponderations = charger_ponderations(chemin)
+
+    assert ponderations.marge_recommandation == Ponderations().marge_recommandation
+
+
+def test_charger_ponderations_marge_recommandation_negative_retombe_sur_le_defaut(tmp_path):
+    chemin = tmp_path / "scoring.yaml"
+    chemin.write_text("marge_recommandation: -5\n", encoding="utf-8")
+
+    ponderations = charger_ponderations(chemin)
+
+    assert ponderations.marge_recommandation == Ponderations().marge_recommandation
+
+
 # --- Robustesse du chargement des pondérations (revue 2026-08-28) --------
 
 
