@@ -8,9 +8,9 @@
 > code, pas un instantané figé. La §10 (Référence technique) en particulier
 > doit être corrigée dès qu'un fichier qu'elle décrit change de comportement.
 >
-> **Dernière mise à jour :** 2026-08-28, fin de la Story 1.6 (dev + revue).
-> **Story courante :** aucune (1.6 terminée, `done`).
-> **Prochaine story :** 1.7 — Signaler les entrées à ne pas manquer (recommandation, FR-8).
+> **Dernière mise à jour :** 2026-08-28, fin de la Story 1.7 (dev + revue).
+> **Story courante :** aucune (1.7 terminée, `done`).
+> **Prochaine story :** 1.8 — Publier une page à URL fixe (rendu + publication + `pipeline.py`).
 
 ---
 
@@ -46,7 +46,7 @@ et se **branche avant** le dédoublonnage pour le seuil de signal (corrigé en r
 collecte → seuil de signal → dédoublonnage → scoring par profil → quotas par registre → (accroches, rendu, publication)
 ```
 
-Depuis la Story 1.6, le module d'accroche (`enrich/llm.py`, AD-7) existe et fonctionne — mais il n'est **pas encore branché** dans ce pipeline : c'est un module autonome, testé directement sur des `Item`. Enchaîner automatiquement collecte → filtrage → enrichissement reste le travail de `pipeline.py` (AD-1, Story 1.8), décision explicite pour ne pas anticiper une story pas encore rédigée.
+Depuis la Story 1.6, le module d'accroche (`enrich/llm.py`, AD-7) existe et fonctionne — mais il n'est **pas encore branché** dans ce pipeline : c'est un module autonome, testé directement sur des `Item`. Depuis la Story 1.7, ce même module porte aussi la détermination de l'entrée recommandée du jour (FR-8, `determiner_recommandation`/`marquer_recommandation`) — déterministe, sur les scores déjà calculés par `filter.py`, sans appel API. Elle non plus n'est **pas encore branchée** : même limite, même raison. Enchaîner automatiquement collecte → filtrage → enrichissement → recommandation reste le travail de `pipeline.py` (AD-1, Story 1.8), décision explicite pour ne pas anticiper une story pas encore rédigée.
 
 ### Décisions structurantes (AD-1 à AD-11)
 
@@ -54,13 +54,13 @@ Document de référence : [ARCHITECTURE-SPINE.md](../_bmad-output/planning-artif
 
 | AD | Règle | État |
 |---|---|---|
-| AD-1 | Paradigme pipeline ; aucune dépendance ne remonte, seul l'orchestrateur ordonne | ⚠️ En tension assumée — `collect.py` orchestre déjà 4 étapes (collecte, dédup, filter, quotas) faute de `pipeline.py`. `enrich/llm.py` (Story 1.6) reste volontairement à l'écart de cette tension : autonome, non branché. Reporté à la Story 1.8 (voir §8) |
+| AD-1 | Paradigme pipeline ; aucune dépendance ne remonte, seul l'orchestrateur ordonne | ⚠️ En tension assumée — `collect.py` orchestre déjà 4 étapes (collecte, dédup, filter, quotas) faute de `pipeline.py`. `enrich/llm.py` (Stories 1.6, 1.7) reste volontairement à l'écart de cette tension : autonome, non branché. Reporté à la Story 1.8 (voir §8) |
 | AD-2 | Connecteurs derrière `Connector.fetch() -> list[Item]`, un module par type | ✅ RSS, JSON, scrape |
 | AD-3 | Sources et Profil en configuration, jamais en dur | ✅ `sources.yaml`, `profil.md`, `scoring.yaml`, `quotas.yaml` |
 | AD-4 | `Item` = forme interne canonique | ✅ 9 champs depuis l'amendement du 2026-08-27 (ajout de `signal`, voir §7.6) |
 | AD-5 | SQLite, propriétaire unique de l'état | ⏳ Pas encore construit — prévu quand une story en aura réellement besoin (dédup cross-nuit Story 3.4, santé des sources Epic 4) |
 | AD-6 | Isolation des pannes par source, jamais d'exception qui interrompt le run | ✅ Éprouvé en conditions réelles (Story 1.2) et durci à plusieurs reprises en revue |
-| AD-7 | Frontière LLM unique (`enrich.llm`, Claude Haiku) | ✅ Construit (Story 1.6) : `enrich/llm.py`, seul point d'appel vérifié mécaniquement (`grep`). Pas encore branché dans un run réel ni validé contre l'API véritable (aucune clé fournie) — voir §8 |
+| AD-7 | Frontière LLM unique (`enrich.llm`, Claude Haiku) | ✅ Construit (Story 1.6, FR-7 : accroches) et étendu (Story 1.7, FR-8 : recommandation) — `enrich/llm.py`, seul point d'appel API vérifié mécaniquement (`grep`) ; la recommandation, elle, n'appelle jamais l'API (déterministe sur `Score.valeur`). Pas encore branché dans un run réel ni validé contre l'API véritable (aucune clé fournie) — voir §8 |
 | AD-8 | Publication par commit git vers GitHub Pages | ⏳ Pas encore construit (Story 1.8) |
 | AD-9 | Idempotence du job nocturne (upsert par date) | ⏳ Epic 3 |
 | AD-10 | Aucune source en violation de CGU ; `robots.txt` vérifié avant scraping | ✅ Vérification runtime implémentée (Story 1.2, seconde passe de revue). Secrets en `.env` (Story 1.6) : vérifié gitignoré, aucune fuite dans le dépôt |
@@ -83,7 +83,7 @@ Projet mené en méthode **BMAD** : brief → PRD → architecture → epics/sto
 
 | Epic | Contenu | État |
 |---|---|---|
-| **Epic 1** | Un premier digest, réel, bout en bout (3-5 sources) | 🟡 En cours — Stories 1.1-1.6 `done`, 1.7-1.9 à faire |
+| **Epic 1** | Un premier digest, réel, bout en bout (3-5 sources) | 🟡 En cours — Stories 1.1-1.7 `done`, 1.8-1.9 à faire |
 | **Epic 2** | Socle élargi (15-20 sources) et robustesse aux pannes | ⏳ Pas commencé |
 | **Epic 3** | Génération nocturne automatique | ⏳ Pas commencé |
 | **Epic 4** | Santé des sources et découverte de nouvelles sources | ⏳ Pas commencé |
@@ -97,14 +97,14 @@ Projet mené en méthode **BMAD** : brief → PRD → architecture → epics/sto
 | 1.3 | Dédoublonnage inter/intra-source | ✅ *(idem — `review` au frontmatter, revue terminée)* | 70 → 97 |
 | 1.4 | Filtrage par signal + scoring par profil | ✅ `done` | 147 → 189 |
 | 1.5 | Quotas par section (Apprendre/Ce qui bouge/Pour le métier) | ✅ `done` | 213 → 221 |
-| 1.6 | Accroches en français (frontière LLM) | ✅ `done` | 235 → **242** |
-| 1.7 | Signaler les entrées à ne pas manquer | ⏳ à faire — **prochaine** | — |
-| 1.8 | Publier une page à URL fixe (rendu + publication + `pipeline.py`) | ⏳ à faire | — |
+| 1.6 | Accroches en français (frontière LLM) | ✅ `done` | 235 → 242 |
+| 1.7 | Signaler les entrées à ne pas manquer | ✅ `done` | 260 → **263** |
+| 1.8 | Publier une page à URL fixe (rendu + publication + `pipeline.py`) | ⏳ à faire — **prochaine** | — |
 | 1.9 | Archiver chaque digest en Markdown | ⏳ à faire | — |
 
 > ⚠️ **Note d'hygiène à traiter** : les fichiers de story 1.2 et 1.3 portent encore `Status: review` dans leur frontmatter, alors que leurs Change Log respectifs démontrent une revue menée et conclue (correctifs appliqués, suites vertes). Seules les Stories 1.4 et 1.5 ont été explicitement repassées à `done`. À corriger mécaniquement (`review` → `done`) la prochaine fois qu'on touche à ces fichiers.
 
-**Total tests actuel : 242, tous verts** (`uv run pytest`).
+**Total tests actuel : 263, tous verts** (`uv run pytest`).
 
 ## 6. Ce qui est livré, story par story
 
@@ -164,6 +164,20 @@ Et deux corrections sur mes propres affirmations, dans la continuité directe de
 
 11 correctifs, 1 report (état de module pas scopé « par run », sans conséquence tant qu'aucun autre code n'appelle `enrich.llm`), 1 rejet. 235 → 242 tests. Détail complet : [1-6-accroches-francaises.md](../_bmad-output/implementation-artifacts/1-6-accroches-francaises.md).
 
+### 6.7 — Story 1.7 : signaler les entrées à ne pas manquer (recommandation, FR-8)
+
+Ajout de `recommandee: bool = False` à `Entree` (`models.py`) et de `marge_recommandation: float = 10.0` à `Ponderations` (`filter.py`, lu à la racine de `scoring.yaml`, même emplacement que `seuil_bruit`). Deux nouvelles fonctions dans `enrich/llm.py` — `determiner_recommandation(classement, ponderations) -> ItemScore | None` et `marquer_recommandation(entrees, classement, ponderations) -> list[Entree]` — qui **n'appellent jamais l'API** : la recommandation est purement déterministe, sur le `Score.valeur` déjà calculé par `filter.py` (Story 1.4), pas un second jugement LLM. Règle : le premier item du classement (déjà trié, jamais retrié ici) est recommandé s'il dépasse le second d'au moins `marge_recommandation` ; sinon, ou avec moins de deux items, personne ne l'est.
+
+**Décision de conception actée avant le code** : `marquer_recommandation` est une fonction **additive**, appliquée après `enrichir()` (Story 1.6), plutôt qu'une extension de sa signature — pour ne courir aucun risque de régression sur les 19 tests de la Story 1.6 (FR-7 génère un texte par appel API, un item à la fois ; FR-8 compare des scores déjà connus, sur tout le lot, sans jamais toucher le réseau : ce ne sont pas la même responsabilité malgré la même ligne dans la table de couverture de l'architecture).
+
+Task 5 (validation) a reproduit **la même lacune qu'aux Stories 1.4 et 1.5**, une troisième fois : un audit par mutation à 4 mutants a laissé passer la suppression de `marge_recommandation` de `config/scoring.yaml` sans le moindre test en échec (260 passed), parce que le défaut codé en dur (10.0) coïncide exactement avec la valeur déclarée dans le fichier. Comblé par une assertion de présence explicite de la clé dans le fichier réel (`test_socle_reel.py`), qui a elle-même dû être durcie en revue (voir plus bas).
+
+**Revue de code (Sonnet 5, même modèle que l'implémentation)** — les 3 couches adversariales ont convergé **indépendamment** sur le même constat le plus sérieux : `marge_recommandation` n'était protégée par aucun garde-fou de signe. Une valeur nulle ou négative dans `config/scoring.yaml` aurait forcé une recommandation *tous les jours*, y compris à égalité exacte des scores — contradiction directe avec l'AC2 (« égalité jamais recommandée »), le même risque structurel qu'un `seuil_bruit`/`bruit` négatif mais qui, eux, sont *légitimement* négatifs. Corrigé par un paramètre `positif_strict` sur `_ponderation`, activé seulement pour `marge_recommandation`.
+
+5 autres correctifs, tous mineurs : un caveat de précondition d'identité manquant sur `marquer_recommandation` (repris de `rapport_classement`/`rapport_quotas` sans leur mise en garde documentée) ; un test « sans affecter le reste » qui ne vérifiait en réalité qu'un seul champ ; le chemin « listes désynchronisées » documenté mais jamais testé ; le garde-fou de présence de `marge_recommandation:` (ajouté en Task 5, cf. ci-dessus) qui matchait aussi une ligne mise en commentaire, désormais ancré en début de ligne ; une précision de câblage ajoutée en docstring pour la Story 1.8 (le classement à passer est celui filtré par quota, pas le classement brut — un gagnant écarté par quota n'a aucune `Entree` à marquer).
+
+6 correctifs, 0 report, 8 rejets — dont un faux positif du Blind Hunter (n'a pas trouvé le fichier de story, qui existe bien mais est gitignored sous `_bmad-output/`) et un risque de virgule flottante vérifié infondé (`_ATTENUATION_PAR_RANG = 0.5` dans `classer()` est une puissance de deux exacte, donc les scores restent exactement représentables en binaire pour les poids entiers en jeu). 260 → 263 tests. Détail complet : [1-7-recommandation-entree.md](../_bmad-output/implementation-artifacts/1-7-recommandation-entree.md).
+
 ## 7. Journal des décisions structurantes (cumulatif)
 
 Ce journal ne répète pas le détail des stories (§6) ; il ne garde que ce qui **contraint les stories suivantes**.
@@ -187,6 +201,8 @@ Ce journal ne répète pas le détail des stories (§6) ; il ne garde que ce qui
 17. **Un module qui appelle un service externe ne lève jamais, dégrade et journalise** — `_client()`/`generer_accroche` (Story 1.6) suivent le même réflexe que `charger_profil`/`charger_ponderations`/`charger_quotas` (décision #5) ; la déduplication du warning « une fois par run » doit couvrir *toutes* les pannes répétitives d'un même run, pas seulement celle envisagée en premier (trouvé en revue : la panne API systémique n'était pas dédupliquée alors que la clé absente l'était déjà).
 18. **Un correctif sur une affirmation de son propre Dev Agent Record se traite comme un correctif de code** : dès qu'un chiffre ou une méthode de vérification citée s'avère inexacte ou plus forte que ce qui a réellement été fait, elle est corrigée avec la même rigueur qu'un bug — pas laissée comme un détail cosmétique (leçon #14 étendue au-delà des seules « exécutions réelles » : Story 1.6, chiffres de tests et affirmation d'équivalence de version SDK).
 19. **Un prompt qui incorpore du contenu de sources externes non fiables porte une consigne explicite anti-injection**, même quand l'impact d'une injection réussie reste borné (ici : influencer le texte d'une accroche affichée, pas d'exécution d'outil ni d'exfiltration) — coût de la précaution nul, absence de précaution jamais neutre (Story 1.6).
+20. **Deux responsabilités qui partagent la même ligne dans une table de couverture d'architecture ne sont pas forcément la même fonction** — FR-7 (accroche, un appel API par item) et FR-8 (recommandation, comparaison de scores sur tout le lot, jamais d'appel réseau) vivent toutes deux dans `enrich/llm.py`, mais dans des fonctions séparées et additives plutôt que par extension de signature — pour ne jamais risquer de régresser une fonction qui marche déjà (Story 1.7).
+21. **Un seuil de configuration numérique nouvellement introduit doit être examiné pour son signe, pas seulement pour son type** — leçon distincte de la #14 (audit par mutation côté configuration) : `marge_recommandation` acceptait silencieusement 0 ou une valeur négative, ce qui aurait forcé une recommandation tous les jours y compris à égalité exacte, en contradiction avec l'AC qu'il est censé garantir. Trouvé indépendamment par les 3 couches de revue en même temps (Story 1.7) — signal fort qu'un contrôle de plage doit être un réflexe systématique pour tout nouveau seuil, pas seulement pour ceux qui, comme `bruit`/`seuil_bruit`, sont légitimement négatifs.
 
 ## 8. Dette technique et travail reporté
 
@@ -198,11 +214,11 @@ Liste vivante complète : [deferred-work.md](../_bmad-output/implementation-arti
 
 **Epic 4 (santé des sources)** — distinction diagnostique fine des échecs, racine JSON vide non signalée, bornes de plausibilité sur les dates aberrantes.
 
-**Story 1.7 (recommandation)** — validation réelle de `enrich/llm.py` contre l'API véritable (langue de sortie, longueur réelle, coût réel mesuré via `usage.input_tokens`/`output_tokens`) : différée faute de clé `ANTHROPIC_API_KEY` en Story 1.6, à faire dès qu'une clé sera fournie, avant de considérer FR-7/NFR1 pleinement validés en conditions réelles.
+**Validation réelle contre l'API véritable (`enrich/llm.py`)** — langue de sortie, longueur réelle, coût réel mesuré via `usage.input_tokens`/`output_tokens` : différée faute de clé `ANTHROPIC_API_KEY` depuis la Story 1.6, confirmé encore sans objet en Story 1.7 (qui n'appelle jamais l'API). À faire dès qu'une clé sera fournie, avant de considérer FR-7/NFR1 pleinement validés en conditions réelles.
 
-**Story 1.8 (rendu, pipeline)** — échappement de `contenu_brut` (risque XSS, s'assurer que Jinja2 échappe automatiquement, jamais `|safe` sur ce champ), `models.py` qui ne valide que la non-nullité de `date_publication` (pas les autres champs), `Score.motifs` calculé mais jamais consommé (aucun lecteur avant l'affichage d'une entrée), `pipeline.py` (voir Epic 3/AD-1 ci-dessus) — qui devra aussi décider comment `enrich/llm.py` s'y branche, et résoudre à cette occasion le scope « par processus » (et non « par run ») de l'état de module de `enrich/llm.py` (`_env_charge`, les deux flags d'avertissement).
+**Story 1.8 (rendu, pipeline)** — échappement de `contenu_brut` (risque XSS, s'assurer que Jinja2 échappe automatiquement, jamais `|safe` sur ce champ), `models.py` qui ne valide que la non-nullité de `date_publication` (pas les autres champs), `Score.motifs` calculé mais jamais consommé (aucun lecteur avant l'affichage d'une entrée — pourrait un jour justifier une recommandation, décidé hors périmètre de la Story 1.7, voir §6.7), `pipeline.py` (voir Epic 3/AD-1 ci-dessus) — qui devra décider comment `enrich/llm.py` s'y branche (accroches **et** recommandation), résoudre à cette occasion le scope « par processus » (et non « par run ») de l'état de module de `enrich/llm.py` (`_env_charge`, les trois flags d'avertissement), et respecter la précision ajoutée en revue de la Story 1.7 : `determiner_recommandation` attend le classement **filtré par quota** (`repartir_par_quotas()`), pas le classement brut de `classer()` — un gagnant écarté par quota n'a aucune `Entree` à marquer.
 
-**Non priorisé / précondition documentée, pas corrigée** — `rapport_quotas`/`rapport_classement` sur-comptent en théorie si le même objet `Item` apparaît deux fois dans leur entrée (non atteignable via `collecter()`, `dedup.py` garantit l'unicité — Story 1.5) ; `SourceConfig` non hashable ; `_resoudre_chemin` ne traverse pas les listes ; validation du `type`/champs requis par source au chargement ; formats de date US ambigus (`%m/%d/%Y`) ; garde de domaine sensible à la casse (scraping) ; `ARCHITECTURE-SPINE.md` toujours à `anthropic 0.119.0` alors que `1.2.0` est installé (aucun AC ne l'exige, dérive sans impact constaté).
+**Non priorisé / précondition documentée, pas corrigée** — `rapport_quotas`/`rapport_classement` (`filter.py`) et, depuis la Story 1.7, `marquer_recommandation` (`enrich/llm.py`) sur-comptent en théorie si le même objet `Item` apparaît deux fois dans leur entrée (non atteignable via `collecter()`, `dedup.py` garantit l'unicité) ; `SourceConfig` non hashable ; `_resoudre_chemin` ne traverse pas les listes ; validation du `type`/champs requis par source au chargement ; formats de date US ambigus (`%m/%d/%Y`) ; garde de domaine sensible à la casse (scraping) ; `ARCHITECTURE-SPINE.md` toujours à `anthropic 0.119.0` alors que `1.2.0` est installé (aucun AC ne l'exige, dérive sans impact constaté).
 
 ## 9. Environnement et infrastructure
 
@@ -210,9 +226,9 @@ Liste vivante complète : [deferred-work.md](../_bmad-output/implementation-arti
 - le `.git` était resté à la racine de `Projets_Perso/` (englobant à tort `Saas_chatbots/`, un projet distinct) — déplacé dans `Agent_veille_tech/.git` pour que ce dossier soit son propre dépôt, aligné sur le remote `petitlaye03/Agent_Veille_Tech` ;
 - `.venv` était un venv Windows inutilisable (`home = C:\Program Files\Python311`) — supprimé et reconstruit avec `uv sync` (`uv` installé via Homebrew, absent du Mac).
 
-**État actuel** : dépôt propre (Stories 1.4, 1.5 et 1.6 committées et poussées). Aucun commit n'est fait automatiquement — décision du 2026-08-27 : les commits restent à la demande explicite d'Abdoulaye.
+**État actuel** : dépôt propre (Stories 1.4 à 1.7 committées et poussées). Aucun commit n'est fait automatiquement — décision du 2026-08-27 : les commits restent à la demande explicite d'Abdoulaye.
 
-**Secret requis, pas encore configuré** : `ANTHROPIC_API_KEY` (`.env`, voir `.env.example`) — nécessaire pour que `enrich/llm.py` génère de vraies accroches et pour la validation réelle différée de la Story 1.6. Aucune clé fournie à ce jour.
+**Secret requis, pas encore configuré** : `ANTHROPIC_API_KEY` (`.env`, voir `.env.example`) — nécessaire pour que `enrich/llm.py` génère de vraies accroches et pour la validation réelle différée depuis la Story 1.6. Aucune clé fournie à ce jour ; confirmé toujours sans objet pour la Story 1.7 (n'appelle jamais l'API).
 
 ## 10. Référence technique — fichier par fichier
 
@@ -233,19 +249,19 @@ src/veille/
   filter.py               Seuil de signal, scoring par profil, quotas par registre
   collect.py              Orchestrateur : enchaîne tout ce qui précède
   enrich/
-    llm.py                 Frontière LLM unique (AD-7) : accroches en français
+    llm.py                 Frontière LLM unique (AD-7) : accroches en français + recommandation
 
 config/
   sources.yaml            Socle de sources (4 aujourd'hui)
   profil.md               Profil de filtrage d'Abdoulaye (thèmes, bruit)
-  scoring.yaml            Pondérations du scoring
+  scoring.yaml            Pondérations du scoring + marge de recommandation
   quotas.yaml             Quotas par registre
 
 .env.example              Placeholder ANTHROPIC_API_KEY= (le vrai .env n'est jamais versionné)
 
 tests/
   conftest.py             Neutralise profil/pondérations/quotas par défaut
-  test_*.py               14 fichiers, 242 tests (détail §10.11)
+  test_*.py               14 fichiers, 263 tests (détail §10.11)
 ```
 
 ### 10.2 `src/veille/models.py` — le contrat canonique
@@ -266,7 +282,7 @@ Un seul type : `Item`, dataclass **frozen** (immuable) portant 9 champs :
 
 C'est le **seul** point de couplage entre la collecte et tout ce qui suit : aucune étape avale ne doit consommer un champ qui n'y figure pas.
 
-**`Entree`** (Story 1.6, FR-7) — dataclass frozen, `item: Item` + `accroche: str`. Ce qu'un `Item` retenu devient une fois enrichi. Volontairement minimal : pas de champ `recommandee` (FR-8/Story 1.7, pas encore écrite — ne pas anticiper).
+**`Entree`** (Story 1.6, FR-7 ; étendue Story 1.7, FR-8) — dataclass frozen, `item: Item` + `accroche: str` + `recommandee: bool = False`. Ce qu'un `Item` retenu devient une fois enrichi. `recommandee` n'est jamais forcée : au plus une `Entree` par jour la porte à `True`, déterminée par `enrich.llm.marquer_recommandation` à partir des scores du jour — jamais par un appel LLM (voir §10.9).
 
 ### 10.3 `src/veille/config.py` — configuration des sources et utilitaires partagés
 
@@ -323,7 +339,9 @@ Trois mécanismes indépendants, dans cet ordre d'exécution (voir §3) :
 
 **1. Seuil de signal** — `filtrer_par_signal(items, sources)` écarte un item dont le `signal` est sous le `seuil_signal` de sa source. Deux garde-fous : une source sans seuil laisse tout passer (jamais implicite) ; un item **sans signal** face à une source qui en déclare un est conservé (l'absence de donnée n'est pas une insuffisance). `_avertir_seuils_inertes` signale un seuil qui ne peut rien filtrer (source dont aucun item ne porte de signal — RSS/scrape, ou JSON sans `mapping.signal`). Rapport : `RapportFiltrageSignal` (par source).
 
-**2. Scoring par profil** — `scorer(item, profil, ponderations) -> Score` : recherche de mots-clés sur titre + contenu, insensible casse/accents, sur mot entier tolérant au singulier/pluriel (`_contient_mot_cle`, `s` final optionnel, frontières conditionnelles qui ne s'ancrent que contre un caractère alphanumérique). Deux règles de cumul (tranchées en revue Story 1.4) : un thème compté dans deux catégories du profil ne compte qu'une fois (au poids le plus fort), et les mots-clés suivants d'une même catégorie sont atténués (`_ATTENUATION_PAR_RANG = 0.5` : ½, ¼…). `classer(items, profil, ponderations) -> list[ItemScore]` score tout, écarte sous `seuil_bruit`, trie par score décroissant (tri stable — égalité de score préserve l'ordre d'arrivée). `charger_ponderations(chemin) -> Ponderations` lit `config/scoring.yaml` : repli par valeur (une clé invalide ne réinitialise pas les autres), rejette les clés inconnues (`_avertir_cles_inconnues`) et les valeurs falsy mal typées. Rapport : `RapportClassement`/`rapport_classement` (diff par identité d'objet entre l'entrée et la sortie de `classer`).
+**2. Scoring par profil** — `scorer(item, profil, ponderations) -> Score` : recherche de mots-clés sur titre + contenu, insensible casse/accents, sur mot entier tolérant au singulier/pluriel (`_contient_mot_cle`, `s` final optionnel, frontières conditionnelles qui ne s'ancrent que contre un caractère alphanumérique). Deux règles de cumul (tranchées en revue Story 1.4) : un thème compté dans deux catégories du profil ne compte qu'une fois (au poids le plus fort), et les mots-clés suivants d'une même catégorie sont atténués (`_ATTENUATION_PAR_RANG = 0.5` : ½, ¼… — une puissance de deux exacte, donc `Score.valeur` reste toujours exactement représentable en binaire pour les poids entiers du profil, point vérifié en revue de la Story 1.7). `classer(items, profil, ponderations) -> list[ItemScore]` score tout, écarte sous `seuil_bruit`, trie par score décroissant (tri stable — égalité de score préserve l'ordre d'arrivée). `charger_ponderations(chemin) -> Ponderations` lit `config/scoring.yaml` : repli par valeur (une clé invalide ne réinitialise pas les autres), rejette les clés inconnues (`_avertir_cles_inconnues`) et les valeurs falsy mal typées. Depuis la Story 1.7, `_ponderation` accepte un paramètre `positif_strict` (utilisé uniquement pour `marge_recommandation`, voir plus bas — `bruit`/`seuil_bruit` restent légitimement négatifs, pas soumis à ce contrôle). Rapport : `RapportClassement`/`rapport_classement` (diff par identité d'objet entre l'entrée et la sortie de `classer`).
+
+**Recommandation du jour (FR-8, Story 1.7)** — `Ponderations` porte aussi `marge_recommandation: float = 10.0`, lue à la racine de `scoring.yaml` (comme `seuil_bruit`, pas sous `ponderations:` — ce n'est pas une pondération par catégorie) : l'écart minimal entre le meilleur score du jour et le second pour que l'entrée soit recommandée. Valeur rejetée si ≤ 0 (repli sur le défaut) — une marge nulle ou négative romprait la garantie « jamais de recommandation à égalité », trouvé en revue. La détermination elle-même (`determiner_recommandation`/`marquer_recommandation`) vit dans `enrich/llm.py`, pas ici — voir §10.9.
 
 **3. Quotas par registre** — `repartir_par_quotas(classement, quotas) -> list[ItemScore]` : un seul passage sur un classement déjà trié (`classer()` l'a fait), compteur par registre, jamais de second tri. Un registre absent de `Quotas` est conservé sans limite (même principe que le signal absent). `charger_quotas(chemin) -> Quotas` : même patron exact que `charger_ponderations`. Rapport : `RapportQuotas`/`rapport_quotas` (par registre, plus un détail interne `ecartes_par_source` pour le diagnostic « source absorbée » de `collect.py`).
 
@@ -338,32 +356,34 @@ Utilitaires partagés entre les trois mécanismes : `_ventilation(comptes)` (for
 - **`run(sources_path)`** — enveloppe fine : `collecter(...).items`, pour les appelants qui ne veulent que la liste.
 - **`_journaliser`** — publie le récapitulatif en `INFO` (réellement visible en prod), et pour chaque source absorbée, nomme **toutes** les causes possibles (doublons / seuil de signal / bruit du profil / quota dépassé) plutôt que d'en présumer une seule.
 
-### 10.9 `src/veille/enrich/llm.py` — frontière LLM unique (AD-7, FR-7)
+### 10.9 `src/veille/enrich/llm.py` — frontière LLM unique (AD-7, FR-7/8)
 
-Seul module du projet qui importe `anthropic` (vérifié mécaniquement par `grep`, pas seulement par convention). Génère une accroche en français pour un item, même depuis une source anglophone.
+Seul module du projet qui importe `anthropic` (vérifié mécaniquement par `grep`, pas seulement par convention). Génère une accroche en français pour un item, même depuis une source anglophone — et, depuis la Story 1.7, détermine aussi l'entrée recommandée du jour, **sans jamais appeler l'API** pour cette seconde responsabilité.
 
 - **`MODELE = "claude-haiku-4-5-20251001"`** — modèle éco (Stack de l'architecture) : c'est ce choix qui rend NFR1 (< 2 €/mois) atteignable, pas un modèle plus lourd.
 - **`_client()`** — construit le client depuis `ANTHROPIC_API_KEY` (`.env`, via `python-dotenv`). Ne lève jamais : clé absente **ou composée uniquement d'espaces** (`.strip()` — trouvé en revue) → `None`, avertissement journalisé une seule fois par run (pas par item, un digest peut compter ~240 items).
 - **`generer_accroche(item, client=None) -> str | None`** — prompt court : titre (borné à `LONGUEUR_TITRE=200`, trouvé en revue — seul l'extrait l'était initialement) + extrait de `contenu_brut` (borné à `LONGUEUR_EXTRAIT=500`). Isolation totale : `anthropic.AnthropicError` et toute autre exception capturées, `None` en retour. Une réponse tronquée par `max_tokens` (`stop_reason == "max_tokens"`, trouvé en revue) est traitée comme un échec plutôt que publiée telle quelle. `_PROMPT_SYSTEME` porte une consigne anti-injection (trouvé en revue) : le titre/extrait sont des sources externes non fiables, jamais des instructions.
 - **`enrichir(items, client=None) -> list[Entree]`** — le client est résolu **une seule fois** (trouvé en revue — sinon reconstruit à chaque item). Un item dont l'accroche échoue est **conservé**, avec son `titre` en repli (décision actée avant le code, jamais `""` même si le titre est vide — repli ultime `"(titre indisponible)"`, trouvé en revue).
 - **Limitation assumée** : AC1 (« 1 à 3 phrases en français ») n'est pas mécaniquement vérifié au-delà de la troncature — ni langue ni nombre de phrases ne sont validés par le code, seulement demandés au modèle. Une vérification complète exigerait un second appel LLM (contraire à AD-7) ou une détection de langue peu fiable.
-- **Non branché** dans `collect.py`/`collecter()` — module autonome, testé directement sur des `Item`. Le branchement attend `pipeline.py` (Story 1.8).
+- **`determiner_recommandation(classement, ponderations=Ponderations()) -> ItemScore | None`** (Story 1.7, FR-8) — purement déterministe, sur le `Score.valeur` déjà calculé par `filter.py`, **aucun appel API**. `classement` est supposé déjà trié par `classer()`, jamais retrié ici : le premier est recommandé s'il dépasse le second d'au moins `ponderations.marge_recommandation` (`>=`, égalité exacte incluse) ; avec moins de deux items, ou un écart insuffisant, jamais de recommandation. Le classement attendu en production est celui filtré par quota (`repartir_par_quotas()`), pas le classement brut — précisé en docstring en revue (Story 1.8 devra respecter ce contrat au câblage).
+- **`marquer_recommandation(entrees, classement, ponderations=Ponderations()) -> list[Entree]`** (Story 1.7) — fonction **additive**, appliquée après `enrichir()` : ne change ni sa signature ni son comportement (décision de conception actée avant le code, voir §6.7). Correspondance par identité d'objet (`id(entree.item)`), même convention que `rapport_classement`/`rapport_quotas` (`filter.py`) — même précondition non vérifiée qu'eux, documentée dans la docstring depuis la revue (un même `Item` référencé par deux `Entree` les ferait toutes deux basculer à `True`, non atteignable via `collecter()` aujourd'hui). Ne lève jamais : gagnant introuvable ou listes désynchronisées → `entrees` inchangée (`Entree` étant frozen, seule l'entrée gagnante devient une nouvelle instance via `dataclasses.replace`).
+- **Non branché** dans `collect.py`/`collecter()` — module autonome, testé directement sur des `Item`/`ItemScore` construits pour le test. Le branchement (accroches **et** recommandation) attend `pipeline.py` (Story 1.8).
 
 ### 10.10 Fichiers de configuration
 
 - **`config/sources.yaml`** — 4 sources aujourd'hui : `openai-news` (RSS, `ce_qui_bouge`), `huggingface-blog` (RSS, `apprendre`), `hf-daily-papers` (JSON, `apprendre`, `seuil_signal: 15`), `anthropic-news` (scrape, `ce_qui_bouge`). **Aucune source en `pour_le_metier`** (dette, §8).
 - **`config/profil.md`** — profil de filtrage d'Abdoulaye : 5 sections de mots-clés (`Thèmes prioritaires`, `Signal fort`, `Domaines d'application`, `Thèmes secondaires`, `Bruit`) + une section `Posture` (prose, ignorée par le parseur). Réécrite en Story 1.5 (revue) pour que la section Bruit ne contienne que des mots-clés atomiques, pas des phrases.
-- **`config/scoring.yaml`** — pondérations : `prioritaire: 10`, `signal_fort: 15`, `domaine: 5`, `secondaire: 2`, `bruit: -20`, `seuil_bruit: -5`.
+- **`config/scoring.yaml`** — pondérations : `prioritaire: 10`, `signal_fort: 15`, `domaine: 5`, `secondaire: 2`, `bruit: -20`, `seuil_bruit: -5`, `marge_recommandation: 10` (Story 1.7 — rejetée si ≤ 0, repli sur le défaut).
 - **`config/quotas.yaml`** — quotas : `apprendre: 3`, `ce_qui_bouge: 3`, `pour_le_metier: 2`.
 - **`.env.example`** (Story 1.6) — placeholder `ANTHROPIC_API_KEY=` ; le vrai `.env` est gitignoré (`!.env.example` annule l'ignorance générique de `.env.*`), vérifié sans fuite dans le dépôt ni son historique.
 
 ### 10.11 Tests
 
-242 tests, aucun appel réseau réel (fixtures locales et clients simulés pour tout ce qui touche le réseau ou une API externe). `tests/conftest.py` neutralise `profil.md`/`scoring.yaml`/`quotas.yaml` par défaut pour tous les tests (fixture `autouse`), afin qu'aucun test ne dépende implicitement de la configuration de production.
+263 tests, aucun appel réseau réel (fixtures locales et clients simulés pour tout ce qui touche le réseau ou une API externe). `tests/conftest.py` neutralise `profil.md`/`scoring.yaml`/`quotas.yaml` par défaut pour tous les tests (fixture `autouse`), afin qu'aucun test ne dépende implicitement de la configuration de production.
 
 | Fichier | Périmètre | Tests |
 |---|---|---|
-| `test_models.py` | `Item`, `Entree`, validation de `date_publication` | 7 |
+| `test_models.py` | `Item`, `Entree` (dont `recommandee`), validation de `date_publication` | 9 |
 | `test_config.py` | `load_sources`, validation de `seuil_signal` | 11 |
 | `test_socle_reel.py` | Garde-fous sur les fichiers de config **réels** (`sources.yaml`, `scoring.yaml`, `quotas.yaml`) | 14 |
 | `test_rss_connector.py` | Connecteur RSS | 6 |
@@ -372,18 +392,18 @@ Seul module du projet qui importe `anthropic` (vérifié mécaniquement par `gre
 | `test_dedup.py` | Dédoublonnage unitaire | 20 |
 | `test_dedup_regressions.py` | Régressions de la revue Story 1.3 | 18 |
 | `test_profil.py` | Parseur de profil, robustesse aux éditions manuelles | 28 |
-| `test_filter.py` | Signal, scoring, quotas — le plus gros fichier | 64 |
-| `test_llm.py` | Frontière LLM, client simulé, isolation par item | 19 |
+| `test_filter.py` | Signal, scoring, quotas, marge de recommandation — le plus gros fichier | 69 |
+| `test_llm.py` | Frontière LLM (client simulé, isolation par item) + recommandation (`determiner_recommandation`/`marquer_recommandation`) | 33 |
 | `test_collect.py` | `run()`, cas d'erreur de haut niveau | 7 |
 | `test_rapport_collecte.py` | Observabilité (`RapportSource`, états muette/échec) | 6 |
 | `test_collecte_integration.py` | **Chemin réel** config → `collecter()` → rapport, pour chaque mécanisme | 25 |
 
 ## 11. Prochaine étape
 
-**Story 1.7 — Signaler les entrées à ne pas manquer** (recommandation explicite, FR-8). À lancer via `bmad-create-story` (elle n'est pas encore rédigée en détail dans `implementation-artifacts/`) puis `bmad-dev-story`, revue via `bmad-code-review`.
+**Story 1.8 — Publier une page à URL fixe** (rendu + publication + `pipeline.py`). À lancer via `bmad-create-story` (elle n'est pas encore rédigée en détail dans `implementation-artifacts/`) puis `bmad-dev-story`, revue via `bmad-code-review`.
 
 Points d'attention déjà identifiés pour les stories à venir (§7, §8) :
-- **Story 1.7** : ajoutera vraisemblablement un champ `recommandee` à `Entree` (`models.py`) — délibérément absent aujourd'hui pour ne pas anticiper. `Score.motifs` (`filter.py`) existe déjà et n'est consommé par rien — pourrait nourrir la justification d'une recommandation, à évaluer.
+- **Story 1.8** : `pipeline.py` (orchestrateur dédié, AD-1) devra brancher `enrich/llm.py` dans un run réel — accroches (`enrichir()`) **et** recommandation (`determiner_recommandation`/`marquer_recommandation`, en lui passant le classement filtré par quota, pas le classement brut) — résoudre le scope « par processus » de l'état de module de `enrich/llm.py`, et échapper `contenu_brut` au rendu (risque XSS).
 - **Epic 2** : le registre `pour_le_metier` est structurellement vide dans le socle actuel — une source emploi/carrière le comblerait.
 - **Dès qu'une clé `ANTHROPIC_API_KEY` sera fournie** : validation réelle de `enrich/llm.py` (Story 1.6) contre l'API véritable — langue, longueur, coût mesuré.
-- **Story 1.8** : `pipeline.py` (orchestrateur dédié, AD-1), branchement de `enrich/llm.py` dans un run réel, échappement de `contenu_brut` au rendu.
+- `Score.motifs` (`filter.py`) existe toujours et n'est consommé par rien — décidé hors périmètre pour justifier une recommandation en Story 1.7 (voir §6.7) ; resterait disponible si un besoin d'affichage l'exigeait plus tard.
