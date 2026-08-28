@@ -5,11 +5,17 @@ from datetime import datetime, timezone
 
 from veille.config import SourceConfig
 from veille.filter import (
+    ItemScore,
     Ponderations,
+    Quotas,
+    Score,
     charger_ponderations,
+    charger_quotas,
     classer,
     filtrer_par_signal,
     rapport_classement,
+    rapport_quotas,
+    repartir_par_quotas,
     scorer,
 )
 from veille.models import Item
@@ -456,3 +462,314 @@ def test_rapport_classement_expose_les_scores_retenus():
     rapport = rapport_classement(items, classement)
 
     assert set(rapport.scores_retenus) == {Ponderations().prioritaire, 0.0}
+
+
+# --- Story 1.5 : Task 1 — chargement des quotas -------------------------
+
+
+def test_les_valeurs_par_defaut_des_quotas_correspondent_a_la_cible_du_prd():
+    """Assertion en dur, volontairement : comparer à `Quotas()` ne détecterait
+    pas une neutralisation des défauts (les deux membres dériveraient
+    ensemble). `conftest.py` fournit toujours un fichier de quotas explicite
+    aux tests, donc ces valeurs par défaut ne sont exercées que par un
+    fichier absent en production réelle — elles doivent rester correctes."""
+    quotas = Quotas()
+
+    assert quotas.apprendre == 3
+    assert quotas.ce_qui_bouge == 3
+    assert quotas.pour_le_metier == 2
+
+
+def test_charger_quotas_absent_retourne_les_valeurs_par_defaut(tmp_path):
+    assert charger_quotas(tmp_path / "inexistant.yaml") == Quotas()
+
+
+def test_charger_quotas_lit_le_fichier_declare(tmp_path):
+    chemin = tmp_path / "quotas.yaml"
+    chemin.write_text(
+        textwrap.dedent(
+            """
+            quotas:
+              apprendre: 5
+              pour_le_metier: 1
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    quotas = charger_quotas(chemin)
+
+    assert quotas.apprendre == 5
+    assert quotas.pour_le_metier == 1
+    # Non déclaré : garde son défaut.
+    assert quotas.ce_qui_bouge == Quotas().ce_qui_bouge
+
+
+def test_charger_quotas_fichier_malforme_retourne_les_valeurs_par_defaut(tmp_path):
+    chemin = tmp_path / "quotas.yaml"
+    chemin.write_text("- ceci est une liste, pas un mapping\n", encoding="utf-8")
+
+    assert charger_quotas(chemin) == Quotas()
+
+
+def test_charger_quotas_ne_leve_pas_sur_un_fichier_non_utf8(tmp_path):
+    chemin = tmp_path / "quotas.yaml"
+    chemin.write_bytes("quotas:\n  apprendre: 3  # décompte\n".encode("latin-1"))
+
+    assert charger_quotas(chemin) == Quotas()
+
+
+def test_un_quota_non_entier_retombe_sur_son_defaut_sans_affecter_les_autres(tmp_path):
+    """Repli par valeur, pas global (leçon Story 1.4)."""
+    chemin = tmp_path / "quotas.yaml"
+    chemin.write_text(
+        "quotas:\n  apprendre: beaucoup\n  pour_le_metier: 1\n", encoding="utf-8"
+    )
+
+    quotas = charger_quotas(chemin)
+
+    assert quotas.apprendre == Quotas().apprendre  # replié
+    assert quotas.pour_le_metier == 1  # conservé
+
+
+def test_un_quota_booleen_retombe_sur_son_defaut(tmp_path):
+    """`apprendre: yes` vaut `True` en YAML : ne doit pas donner un quota de 1."""
+    chemin = tmp_path / "quotas.yaml"
+    chemin.write_text("quotas:\n  apprendre: yes\n", encoding="utf-8")
+
+    assert charger_quotas(chemin).apprendre == Quotas().apprendre
+
+
+def test_un_quota_negatif_retombe_sur_son_defaut(tmp_path):
+    chemin = tmp_path / "quotas.yaml"
+    chemin.write_text("quotas:\n  apprendre: -1\n", encoding="utf-8")
+
+    assert charger_quotas(chemin).apprendre == Quotas().apprendre
+
+
+def test_un_quota_non_entier_flottant_retombe_sur_son_defaut(tmp_path):
+    chemin = tmp_path / "quotas.yaml"
+    chemin.write_text("quotas:\n  apprendre: 2.5\n", encoding="utf-8")
+
+    assert charger_quotas(chemin).apprendre == Quotas().apprendre
+
+
+# --- Story 1.5 : Task 2 — répartition par quotas -------------------------
+
+
+def _is_(item, score=0.0):
+    return ItemScore(item=item, score=Score(valeur=score))
+
+
+def test_le_quota_est_respecte_par_registre():
+    quotas = Quotas(apprendre=2, ce_qui_bouge=1, pour_le_metier=1)
+    classement = [
+        _is_(_item("a", registre="apprendre"), 30),
+        _is_(_item("b", registre="apprendre"), 20),
+        _is_(_item("c", registre="apprendre"), 10),  # au-delà du quota
+        _is_(_item("d", registre="ce_qui_bouge"), 25),
+        _is_(_item("e", registre="ce_qui_bouge"), 5),  # au-delà du quota
+    ]
+
+    repartition = repartir_par_quotas(classement, quotas)
+
+    registres_retenus = [is_.item.registre for is_ in repartition]
+    assert registres_retenus.count("apprendre") == 2
+    assert registres_retenus.count("ce_qui_bouge") == 1
+
+
+def test_un_jour_creux_n_est_jamais_rempli_artificiellement():
+    """AC3 : moins d'items que le quota affiche moins d'entrées."""
+    quotas = Quotas(apprendre=3, ce_qui_bouge=3, pour_le_metier=2)
+    classement = [_is_(_item("a", registre="apprendre"), 10)]
+
+    repartition = repartir_par_quotas(classement, quotas)
+
+    assert len(repartition) == 1
+
+
+def test_l_ordre_par_score_est_preserve_a_l_interieur_d_un_registre():
+    """AC2 : jamais retrié — l'ordre de `classer()` fait foi."""
+    quotas = Quotas(apprendre=5, ce_qui_bouge=5, pour_le_metier=5)
+    classement = [
+        _is_(_item("a", registre="apprendre"), 30),
+        _is_(_item("b", registre="apprendre"), 20),
+        _is_(_item("c", registre="apprendre"), 10),
+    ]
+
+    repartition = repartir_par_quotas(classement, quotas)
+
+    assert [is_.item.source_id for is_ in repartition] == ["a", "b", "c"]
+
+
+def test_le_quota_ne_retient_que_les_mieux_scores_du_registre():
+    """Le quota coupe après les N meilleurs scores du registre, pas les N premiers arrivés."""
+    quotas = Quotas(apprendre=1, ce_qui_bouge=5, pour_le_metier=5)
+    classement = [
+        _is_(_item("a", registre="apprendre"), 30),
+        _is_(_item("b", registre="apprendre"), 20),
+    ]
+
+    repartition = repartir_par_quotas(classement, quotas)
+
+    assert [is_.item.source_id for is_ in repartition] == ["a"]
+
+
+def test_un_registre_inconnu_de_quotas_est_conserve_sans_limite(caplog):
+    """AC6 : l'absence de réglage n'est pas une insuffisance de contenu."""
+    quotas = Quotas(apprendre=1, ce_qui_bouge=1, pour_le_metier=1)
+    classement = [
+        _is_(_item("a", registre="registre-invente"), 30),
+        _is_(_item("b", registre="registre-invente"), 20),
+        _is_(_item("c", registre="registre-invente"), 10),
+    ]
+
+    with caplog.at_level("WARNING"):
+        repartition = repartir_par_quotas(classement, quotas)
+
+    assert len(repartition) == 3
+    assert any("registre-invente" in r.message for r in caplog.records)
+
+
+def test_le_departage_a_score_egal_reste_stable_apres_repartition():
+    """Aucun ordre aléatoire (leçon Story 1.3/1.4)."""
+    quotas = Quotas(apprendre=10, ce_qui_bouge=10, pour_le_metier=10)
+    classement = [_is_(_item(f"src-{i}", registre="apprendre"), 0.0) for i in range(4)]
+
+    repartition = repartir_par_quotas(classement, quotas)
+
+    assert [is_.item.source_id for is_ in repartition] == [f"src-{i}" for i in range(4)]
+
+
+# --- Rapport de la répartition (AC5) -------------------------------------
+
+
+def test_rapport_quotas_compte_les_retenus_et_ecartes_par_registre():
+    quotas = Quotas(apprendre=1, ce_qui_bouge=5, pour_le_metier=5)
+    classement = [
+        _is_(_item("a", registre="apprendre"), 30),
+        _is_(_item("b", registre="apprendre"), 20),
+        _is_(_item("c", registre="ce_qui_bouge"), 15),
+    ]
+
+    repartition = repartir_par_quotas(classement, quotas)
+    rapport = rapport_quotas(classement, repartition)
+
+    assert rapport.retenus_par_registre == {"apprendre": 1, "ce_qui_bouge": 1}
+    assert rapport.ecartes_par_registre == {"apprendre": 1}
+    assert rapport.total_ecartes == 1
+
+
+def test_rapport_quotas_expose_aussi_les_ecartes_par_source():
+    """Détail non exigé par l'AC (qui ne demande que « par registre ») mais
+    nécessaire au diagnostic « source absorbée » de `collect.py` — sans lui,
+    un quota dépassé retomberait à tort sur « cause indéterminée »."""
+    quotas = Quotas(apprendre=1, ce_qui_bouge=5, pour_le_metier=5)
+    classement = [
+        _is_(_item("src-a", registre="apprendre"), 30),
+        _is_(_item("src-b", registre="apprendre"), 20),
+    ]
+
+    repartition = repartir_par_quotas(classement, quotas)
+    rapport = rapport_quotas(classement, repartition)
+
+    assert rapport.ecartes_par_source == {"src-b": 1}
+
+
+def test_rapport_quotas_sans_depassement_est_vide():
+    quotas = Quotas(apprendre=5, ce_qui_bouge=5, pour_le_metier=5)
+    classement = [_is_(_item("a", registre="apprendre"), 10)]
+
+    repartition = repartir_par_quotas(classement, quotas)
+    rapport = rapport_quotas(classement, repartition)
+
+    assert rapport.total_ecartes == 0
+    assert rapport.retenus_par_registre == {"apprendre": 1}
+
+
+# --- Correctifs de revue (2026-08-28) ------------------------------------
+
+
+def test_resume_avec_retenus_vides_mais_ecartes_reste_lisible():
+    """Régression : un quota à 0 pouvait vider tout un registre présent,
+    laissant `retenus_par_registre` vide alors que `total_ecartes` ne
+    l'était pas — `resume()` produisait `'Quotas :  retenu(s)'` (chaîne
+    vide avant « retenu(s) »)."""
+    quotas = Quotas(apprendre=0, ce_qui_bouge=5, pour_le_metier=5)
+    classement = [_is_(_item("a", registre="apprendre"), 10)]
+
+    repartition = repartir_par_quotas(classement, quotas)
+    resume = rapport_quotas(classement, repartition).resume()
+
+    assert "Quotas :  retenu" not in resume  # jamais de champ vide
+    assert "aucun item retenu" in resume
+    assert "1 écarté(s) par dépassement de quota" in resume
+
+
+def test_charger_quotas_valeur_falsy_mal_typee_est_signalee(tmp_path):
+    """Régression : `quotas: 0` (falsy) passait `.get(...) or {}` sans
+    déclencher l'avertissement `'n'est pas un mapping'` que `quotas: 5`
+    (truthy, tout aussi mal typé) déclenchait bien."""
+    chemin = tmp_path / "quotas.yaml"
+    chemin.write_text("quotas: 0\n", encoding="utf-8")
+
+    assert charger_quotas(chemin) == Quotas()
+
+
+def test_charger_quotas_cle_inconnue_est_signalee(tmp_path, caplog):
+    """Régression : une clé mal orthographiée sous `quotas:` était perdue
+    sans le moindre avertissement, contrairement à une valeur mal typée
+    pour une clé reconnue."""
+    chemin = tmp_path / "quotas.yaml"
+    chemin.write_text(
+        "quotas:\n  pour_le_metier_mal_ecrit: 7\n  apprendre: 1\n", encoding="utf-8"
+    )
+
+    with caplog.at_level("WARNING"):
+        quotas = charger_quotas(chemin)
+
+    assert quotas.apprendre == 1
+    assert any("pour_le_metier_mal_ecrit" in r.message for r in caplog.records)
+
+
+def test_charger_quotas_none_ne_leve_pas():
+    """Régression : `charger_quotas(None)` levait `TypeError`, alors que la
+    docstring promet « ne lève jamais »."""
+    assert charger_quotas(None) == Quotas()
+
+
+def test_charger_ponderations_valeur_falsy_mal_typee_est_signalee(tmp_path):
+    chemin = tmp_path / "scoring.yaml"
+    chemin.write_text("ponderations: 0\n", encoding="utf-8")
+
+    assert charger_ponderations(chemin) == Ponderations()
+
+
+def test_charger_ponderations_cle_inconnue_est_signalee(tmp_path, caplog):
+    chemin = tmp_path / "scoring.yaml"
+    chemin.write_text("ponderations:\n  priorotaire: 100\n", encoding="utf-8")
+
+    with caplog.at_level("WARNING"):
+        charger_ponderations(chemin)
+
+    assert any("priorotaire" in r.message for r in caplog.records)
+
+
+def test_charger_ponderations_none_ne_leve_pas():
+    assert charger_ponderations(None) == Ponderations()
+
+
+def test_un_registre_none_est_distingue_d_un_registre_inconnu_texte(caplog):
+    """Régression : `item.registre is None` (source mal configurée en
+    amont) produisait le même message qu'un registre valide mais non réglé
+    — deux causes différentes méritent deux diagnostics différents."""
+    quotas = Quotas(apprendre=1, ce_qui_bouge=1, pour_le_metier=1)
+    classement = [_is_(_item("a", registre=None), 10)]
+
+    with caplog.at_level("WARNING"):
+        repartition = repartir_par_quotas(classement, quotas)
+
+    assert len(repartition) == 1  # toujours conservé, comportement inchangé
+    message = caplog.records[0].message
+    assert "sans registre défini" in message
+    assert "'None'" not in message

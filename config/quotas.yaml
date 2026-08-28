@@ -1,0 +1,10 @@
+# Quotas par section du digest (AD-3, Story 1.5).
+#
+# Modifier une valeur ici change la répartition sans toucher au code. Un
+# registre avec moins d'items disponibles que son quota affiche moins
+# d'entrées — jamais de remplissage artificiel.
+
+quotas:
+  apprendre: 3
+  ce_qui_bouge: 3
+  pour_le_metier: 2

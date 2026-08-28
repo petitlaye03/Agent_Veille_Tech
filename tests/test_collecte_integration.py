@@ -13,6 +13,7 @@ du dédoublonnage appelaient `dedupliquer()` directement, sans jamais
 emprunter le chemin réel depuis `sources.yaml`.
 """
 
+import json
 import textwrap
 from pathlib import Path
 
@@ -357,6 +358,122 @@ class TestOrdreDuPipeline:
         assert [i.source_id for i in resultat.items] == ["sans-seuil"], (
             "l'article a disparu : le seuil de 'avec-seuil' a amputé 'sans-seuil'"
         )
+
+
+class TestQuotasEffectifs:
+    """Tue le mutant « quotas court-circuités » (Task 3, Story 1.5) : vérifie
+    que `collecter()` emprunte réellement `config/quotas.yaml` plutôt que
+    d'ignorer le résultat de `repartir_par_quotas()`."""
+
+    def _socle_registre(self, tmp_path: Path, registre: str, n: int) -> Path:
+        """n items dans un seul registre, via une source JSON inline."""
+        payload = tmp_path / f"{registre}.json"
+        payload.write_text(
+            json.dumps([{"id": f"{registre}-{i}", "titre": f"Item {i}"} for i in range(n)]),
+            encoding="utf-8",
+        )
+        return _socle(
+            tmp_path,
+            f"""
+            sources:
+              - id: source-{registre}
+                type: json
+                url: {payload.as_uri()}
+                langue: fr
+                registre: {registre}
+                mapping: {{guid: id, titre: titre}}
+            """,
+        )
+
+    def test_le_quota_est_applique_par_le_chemin_reel(self, tmp_path):
+        socle = self._socle_registre(tmp_path, "apprendre", 5)
+        quotas = tmp_path / "quotas.yaml"
+        quotas.write_text("quotas:\n  apprendre: 2\n", encoding="utf-8")
+
+        resultat = collecter(socle, quotas_path=quotas)
+
+        assert len(resultat.items) == 2
+
+    def test_relever_le_quota_retient_davantage(self, tmp_path):
+        """AC4 : changer le quota dans le YAML change le résultat, sans code."""
+        socle = self._socle_registre(tmp_path, "apprendre", 5)
+        quotas = tmp_path / "quotas.yaml"
+        quotas.write_text("quotas:\n  apprendre: 4\n", encoding="utf-8")
+
+        resultat = collecter(socle, quotas_path=quotas)
+
+        assert len(resultat.items) == 4
+
+    def test_un_jour_creux_n_est_jamais_rempli_via_le_chemin_reel(self, tmp_path):
+        """AC3 : moins d'items que le quota, jamais de remplissage."""
+        socle = self._socle_registre(tmp_path, "apprendre", 1)
+        quotas = tmp_path / "quotas.yaml"
+        quotas.write_text("quotas:\n  apprendre: 3\n", encoding="utf-8")
+
+        resultat = collecter(socle, quotas_path=quotas)
+
+        assert len(resultat.items) == 1
+
+    def test_le_recapitulatif_rend_compte_des_quotas_par_registre(self, tmp_path):
+        """AC5."""
+        socle = self._socle_registre(tmp_path, "apprendre", 5)
+        quotas = tmp_path / "quotas.yaml"
+        quotas.write_text("quotas:\n  apprendre: 2\n", encoding="utf-8")
+
+        resume = collecter(socle, quotas_path=quotas).resume()
+
+        assert "3 écarté(s) par dépassement de quota" in resume
+        assert "apprendre" in resume
+
+    def test_une_source_entierement_absorbee_par_le_quota_est_diagnostiquee(
+        self, tmp_path, caplog
+    ):
+        """Une source noyée par une autre du même registre doit être
+        diagnostiquée comme un quota dépassé, pas une cause indéterminée."""
+        payload_dominante = tmp_path / "dominante.json"
+        payload_dominante.write_text(
+            json.dumps([{"id": f"d{i}", "titre": f"Dominant {i}"} for i in range(5)]),
+            encoding="utf-8",
+        )
+        payload_noyee = tmp_path / "noyee.json"
+        payload_noyee.write_text(
+            json.dumps([{"id": "n0", "titre": "Noyé"}]), encoding="utf-8"
+        )
+
+        socle = _socle(
+            tmp_path,
+            f"""
+            sources:
+              - id: source-dominante
+                type: json
+                priorite: 10
+                url: {payload_dominante.as_uri()}
+                langue: fr
+                registre: apprendre
+                mapping: {{guid: id, titre: titre}}
+              - id: source-noyee
+                type: json
+                priorite: 1
+                url: {payload_noyee.as_uri()}
+                langue: fr
+                registre: apprendre
+                mapping: {{guid: id, titre: titre}}
+            """,
+        )
+        quotas = tmp_path / "quotas.yaml"
+        quotas.write_text("quotas:\n  apprendre: 1\n", encoding="utf-8")
+        # Le profil neutre par défaut (`conftest.py`) laisse tous les scores
+        # à égalité : le départage stable garde les items dans l'ordre de
+        # collecte, donc 'source-dominante' (déclarée en premier) l'emporte.
+
+        with caplog.at_level("WARNING"):
+            resultat = collecter(socle, quotas_path=quotas)
+
+        assert [r.source_id for r in resultat.sources_absorbees] == ["source-noyee"]
+        message = next(
+            r.message for r in caplog.records if "source-noyee' absorbée" in r.message
+        )
+        assert "quota de registre dépassé" in message
 
 
 class TestVisibiliteDuTriExcessif:

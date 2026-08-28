@@ -29,6 +29,7 @@ from veille.profil import Profil, sans_accents
 logger = logging.getLogger(__name__)
 
 DEFAULT_SCORING_PATH = chemin_config("scoring.yaml")
+DEFAULT_QUOTAS_PATH = chemin_config("quotas.yaml")
 
 # Atténuation appliquée à chaque mot-clé supplémentaire d'une même catégorie :
 # le deuxième compte moitié, le troisième un quart, etc. Sans elle, empiler
@@ -55,20 +56,39 @@ class RapportFiltrageSignal:
             return "Signal : aucun item sous le seuil."
         return (
             f"Signal : {self.total_ecartes} item(s) sous le seuil de leur "
-            f"source — {_par_source(self.ecartes_par_source)}"
+            f"source — {_ventilation(self.ecartes_par_source)}"
         )
 
 
-def _par_source(comptes: dict[str, int]) -> str:
-    """Ventilation nommée, sur le modèle de `RapportDedoublonnage.resume()`.
+def _avertir_cles_inconnues(
+    categories: dict, connues: tuple[str, ...], chemin, label: str
+) -> None:
+    """Signale une clé de configuration non reconnue plutôt que de la perdre
+    en silence. Sans ce garde-fou, une faute de frappe dans le **nom** d'un
+    réglage (`pour_le_metier` mal orthographié) est strictement plus
+    discrète qu'une faute dans sa **valeur** (`apprendre: beaucoup`), qui
+    est déjà journalisée — asymétrie trouvée en revue de la Story 1.5.
+    """
+    for cle in sorted(set(categories) - set(connues)):
+        logger.warning(
+            "%s '%s' inconnu(e) dans %s, ignoré(e) — attendu parmi : %s.",
+            label,
+            cle,
+            chemin,
+            ", ".join(connues),
+        )
 
-    AC7 exige un compte rendu **par source** : un total seul ne dit pas
-    laquelle a été vidée, et c'est précisément ce qu'il faut voir quand un
-    seuil ou un profil devient trop agressif.
+
+def _ventilation(comptes: dict[str, int]) -> str:
+    """Ventilation nommée d'un compte de pertes, sur le modèle de
+    `RapportDedoublonnage.resume()`. Générique : sert aussi bien à ventiler
+    par source (signal, bruit) que par registre (quotas) — un total seul ne
+    dit pas *où* le tri a été agressif, et c'est précisément ce qu'il faut
+    voir pour corriger un réglage trop serré.
     """
     return ", ".join(
-        f"{source} (-{n})"
-        for source, n in sorted(comptes.items(), key=lambda x: (-x[1], x[0]))
+        f"{cle} (-{n})"
+        for cle, n in sorted(comptes.items(), key=lambda x: (-x[1], x[0]))
     )
 
 
@@ -153,12 +173,15 @@ def charger_ponderations(chemin: str | Path = DEFAULT_SCORING_PATH) -> Ponderati
     try:
         with open(chemin, encoding="utf-8") as f:
             brut = yaml.safe_load(f)
-    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+    except (OSError, TypeError, UnicodeDecodeError, yaml.YAMLError):
         # `UnicodeDecodeError` fait partie du contrat : le fichier contient
         # des accents, et un éditeur mal configuré suffit à le réenregistrer
-        # en latin-1. Cette fonction s'exécute hors de l'isolation de panne
-        # par source (AD-6) — y laisser filer une exception coûterait la nuit
-        # entière, sources saines comprises.
+        # en latin-1. `TypeError` couvre un appel direct avec `chemin=None` —
+        # improbable via `collecter()` (qui résout toujours un chemin par
+        # défaut), mais cette fonction est publique et sa docstring promet
+        # de ne jamais lever. Cette fonction s'exécute hors de l'isolation de
+        # panne par source (AD-6) — y laisser filer une exception coûterait
+        # la nuit entière, sources saines comprises.
         logger.warning(
             "Pondérations illisibles (%s) — valeurs par défaut.", chemin
         )
@@ -172,13 +195,25 @@ def charger_ponderations(chemin: str | Path = DEFAULT_SCORING_PATH) -> Ponderati
         return Ponderations()
 
     defauts = Ponderations()
-    categories = brut.get("ponderations") or {}
+    # `.get(..., {})` et non `.get(...) or {}` : la seconde forme masquerait
+    # une clé présente mais falsy-et-mal-typée (`ponderations: 0`) derrière
+    # le même silence qu'une clé absente, alors qu'une valeur véritablement
+    # mal typée mais truthy (`ponderations: 5`) est, elle, déjà journalisée
+    # juste en dessous — asymétrie trouvée en revue de la Story 1.5.
+    categories = brut.get("ponderations", {})
     if not isinstance(categories, dict):
         logger.warning(
             "La clé 'ponderations' de %s n'est pas un mapping — valeurs par défaut.",
             chemin,
         )
         return Ponderations()
+
+    _avertir_cles_inconnues(
+        categories,
+        ("prioritaire", "signal_fort", "domaine", "secondaire", "bruit"),
+        chemin,
+        "Catégorie de pondération",
+    )
 
     valeurs = {}
     for nom in ("prioritaire", "signal_fort", "domaine", "secondaire", "bruit"):
@@ -352,7 +387,7 @@ class RapportClassement:
 
         base = f"Classement : {self.total_ecartes} item(s) écarté(s) comme bruit"
         if self.total_ecartes:
-            base += f" — {_par_source(self.ecartes_par_source)}"
+            base += f" — {_ventilation(self.ecartes_par_source)}"
         if self.scores_retenus:
             base += (
                 f" — scores retenus min {min(self.scores_retenus):.0f} / "
@@ -371,6 +406,12 @@ def rapport_classement(items: list[Item], classement: list[ItemScore]) -> Rappor
     par identité d'objet, pas par valeur : deux items distincts qui
     partageraient exactement les mêmes champs ne doivent pas se masquer
     l'un l'autre dans le compte.
+
+    Précondition non vérifiée (relevée en revue de la Story 1.5) : un même
+    objet `Item` référencé plusieurs fois dans `classement` ferait
+    sur-compter les retenus. Non atteignable via `collecter()` — `dedup.py`
+    garantit qu'un `Item` gagnant n'apparaît qu'une fois — donc non corrigé
+    ici ; à traiter si cette fonction est un jour appelée hors de ce chemin.
     """
     retenus = {id(item_score.item) for item_score in classement}
 
@@ -381,3 +422,226 @@ def rapport_classement(items: list[Item], classement: list[ItemScore]) -> Rappor
 
     scores_retenus = tuple(item_score.score.valeur for item_score in classement)
     return RapportClassement(ecartes_par_source=dict(ecartes), scores_retenus=scores_retenus)
+
+
+@dataclass(frozen=True)
+class Quotas:
+    """Quotas d'items retenus par registre (AD-3, FR-6) : déclarés en
+    configuration (`config/quotas.yaml`), jamais en dur. Ces valeurs ne
+    servent que de repli quand le fichier est absent ou illisible."""
+
+    apprendre: int = 3
+    ce_qui_bouge: int = 3
+    pour_le_metier: int = 2
+
+
+_CHAMPS_QUOTAS = ("apprendre", "ce_qui_bouge", "pour_le_metier")
+
+
+def charger_quotas(chemin: str | Path = DEFAULT_QUOTAS_PATH) -> Quotas:
+    """Lit `config/quotas.yaml`. Ne lève jamais : mêmes garde-fous que
+    `charger_ponderations` — fichier absent, illisible (y compris
+    `UnicodeDecodeError`), ou dont une valeur n'est pas un entier positif,
+    dégrade vers les quotas par défaut plutôt que de faire échouer la
+    répartition."""
+    try:
+        with open(chemin, encoding="utf-8") as f:
+            brut = yaml.safe_load(f)
+    except (OSError, TypeError, UnicodeDecodeError, yaml.YAMLError):
+        # `TypeError` couvre un appel direct avec `chemin=None` : improbable
+        # via `collecter()` (qui résout toujours un chemin par défaut), mais
+        # cette fonction est publique et sa docstring promet de ne jamais
+        # lever.
+        logger.warning("Quotas illisibles (%s) — valeurs par défaut.", chemin)
+        return Quotas()
+
+    if not isinstance(brut, dict):
+        logger.warning(
+            "%s ne contient pas un mapping YAML à la racine — valeurs par défaut.",
+            chemin,
+        )
+        return Quotas()
+
+    defauts = Quotas()
+    # `.get(..., {})` et non `.get(...) or {}` : voir la note équivalente
+    # dans `charger_ponderations` — un `quotas: 0` doit être signalé comme
+    # mal typé, pas confondu avec une clé absente.
+    categories = brut.get("quotas", {})
+    if not isinstance(categories, dict):
+        logger.warning(
+            "La clé 'quotas' de %s n'est pas un mapping — valeurs par défaut.",
+            chemin,
+        )
+        return Quotas()
+
+    _avertir_cles_inconnues(categories, _CHAMPS_QUOTAS, chemin, "Registre")
+
+    valeurs = {
+        nom: _quota(categories, nom, getattr(defauts, nom), chemin)
+        for nom in _CHAMPS_QUOTAS
+    }
+    return Quotas(**valeurs)
+
+
+def _quota(source: dict, nom: str, defaut: int, chemin) -> int:
+    """Lit un quota, en retombant sur son défaut si inutilisable.
+
+    Repli **par valeur**, pas global (leçon Story 1.4) : une seule faute de
+    frappe ne doit pas réinitialiser les autres quotas du fichier.
+    """
+    if nom not in source:
+        return defaut
+
+    converti = _to_int_positif(source[nom])
+    if converti is None:
+        logger.warning(
+            "Quota '%s' inutilisable (%r) dans %s — valeur par défaut (%s).",
+            nom,
+            source[nom],
+            chemin,
+            defaut,
+        )
+        return defaut
+    return converti
+
+
+def _to_int_positif(valeur) -> int | None:
+    """Convertit en entier positif ou nul, ou `None` si inutilisable.
+
+    Rejette les booléens (`apprendre: yes` vaut `True` en YAML 1.1, ce qui
+    donnerait silencieusement un quota de 1), les valeurs non entières
+    (`2.5`), et les valeurs négatives — un quota négatif n'a pas de sens et
+    romprait le comptage de `repartir_par_quotas`.
+    """
+    if isinstance(valeur, bool):
+        return None
+    if isinstance(valeur, int):
+        return valeur if valeur >= 0 else None
+    if isinstance(valeur, float):
+        return int(valeur) if valeur.is_integer() and valeur >= 0 else None
+    try:
+        entier = int(str(valeur))
+    except (TypeError, ValueError):
+        return None
+    return entier if entier >= 0 else None
+
+
+def repartir_par_quotas(classement: list[ItemScore], quotas: Quotas) -> list[ItemScore]:
+    """Répartit un classement déjà trié en respectant un quota par registre.
+
+    Un seul passage, dans l'ordre où `classement` arrive : `classer()` l'a
+    déjà trié par score décroissant, donc garder les N premiers items d'un
+    registre revient à garder ses N mieux notés, sans second tri.
+
+    Un registre absent de `Quotas` — faute de frappe, section oubliée — est
+    **conservé sans limite**, pas écarté (AC6) : l'absence de réglage n'est
+    pas une insuffisance de contenu, même principe que le signal absent en
+    Story 1.4 (AC2).
+    """
+    limites = {nom: getattr(quotas, nom) for nom in _CHAMPS_QUOTAS}
+
+    retenus: list[ItemScore] = []
+    comptes: Counter[str] = Counter()
+    avertis: set[str] = set()
+
+    for item_score in classement:
+        registre = item_score.item.registre
+        limite = limites.get(registre)
+
+        if limite is None:
+            if registre not in avertis:
+                if registre is None:
+                    # Distinct du cas ci-dessous : ici la donnée elle-même
+                    # est probablement mal formée en amont (`registre: null`
+                    # dans `sources.yaml`), pas un simple registre non réglé.
+                    logger.warning(
+                        "Item sans registre défini (source mal configurée en "
+                        "amont ?) — conservé sans limite."
+                    )
+                else:
+                    logger.warning(
+                        "Registre '%s' absent de la configuration de quotas — "
+                        "ses items sont conservés sans limite.",
+                        registre,
+                    )
+                avertis.add(registre)
+            retenus.append(item_score)
+            continue
+
+        if comptes[registre] < limite:
+            retenus.append(item_score)
+            comptes[registre] += 1
+
+    return retenus
+
+
+@dataclass(frozen=True)
+class RapportQuotas:
+    """Ce que la répartition par quotas a retenu et écarté, par registre —
+    sans quoi un quota trop serré serait invisible (AC5).
+
+    `ecartes_par_source` est un détail supplémentaire, non exigé par l'AC
+    (qui ne demande que « par registre ») : sans lui, le diagnostic « source
+    absorbée » de `collect.py` ne pourrait pas nommer un quota dépassé comme
+    cause possible, et retomberait à tort sur « cause indéterminée ».
+    """
+
+    retenus_par_registre: dict[str, int] = field(default_factory=dict)
+    ecartes_par_registre: dict[str, int] = field(default_factory=dict)
+    ecartes_par_source: dict[str, int] = field(default_factory=dict)
+
+    @property
+    def total_ecartes(self) -> int:
+        return sum(self.ecartes_par_registre.values())
+
+    def resume(self) -> str:
+        if not self.retenus_par_registre and not self.total_ecartes:
+            return "Quotas : aucun item réparti."
+
+        if self.retenus_par_registre:
+            retenus = ", ".join(
+                f"{registre}={n}" for registre, n in sorted(self.retenus_par_registre.items())
+            )
+            base = f"Quotas : {retenus} retenu(s)"
+        else:
+            # Un quota à 0 peut vider entièrement tout registre présent
+            # cette nuit-là : `retenus_par_registre` est alors vide alors
+            # que `total_ecartes` ne l'est pas — cas distinct du « rien à
+            # rapporter » ci-dessus (trouvé en revue de la Story 1.5).
+            base = "Quotas : aucun item retenu"
+        if self.total_ecartes:
+            base += (
+                f" — {self.total_ecartes} écarté(s) par dépassement de quota "
+                f"({_ventilation(self.ecartes_par_registre)})"
+            )
+        return base
+
+
+def rapport_quotas(
+    classement: list[ItemScore], repartition: list[ItemScore]
+) -> RapportQuotas:
+    """Construit le compte-rendu à partir du résultat de `repartir_par_quotas`.
+
+    Même principe que `rapport_classement` (Story 1.4) : comparer l'entrée à
+    la sortie par identité d'objet plutôt que de reproduire la logique de
+    quota — et la même précondition non vérifiée s'applique (voir sa
+    docstring) : non atteignable via `collecter()` aujourd'hui.
+    """
+    retenus_ids = {id(item_score.item) for item_score in repartition}
+
+    retenus: Counter[str] = Counter()
+    ecartes: Counter[str] = Counter()
+    ecartes_source: Counter[str] = Counter()
+    for item_score in classement:
+        item = item_score.item
+        if id(item) in retenus_ids:
+            retenus[item.registre] += 1
+        else:
+            ecartes[item.registre] += 1
+            ecartes_source[item.source_id] += 1
+
+    return RapportQuotas(
+        retenus_par_registre=dict(retenus),
+        ecartes_par_registre=dict(ecartes),
+        ecartes_par_source=dict(ecartes_source),
+    )

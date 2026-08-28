@@ -112,6 +112,22 @@ def test_le_fichier_de_ponderations_existe_et_se_charge():
     assert ponderations.signal_fort > ponderations.secondaire
 
 
+def test_le_fichier_de_quotas_existe_et_se_charge():
+    """Comme `scoring.yaml` : un fichier de quotas supprimé serait sans
+    effet observable pour la plupart des tests (`conftest.py` fournit
+    toujours un fichier explicite), et passerait donc inaperçu. Ce
+    garde-fou rend sa disparition visible (AD-3, Story 1.5)."""
+    from veille.filter import charger_quotas
+
+    chemin = RACINE_PROJET / "config" / "quotas.yaml"
+
+    assert chemin.is_file(), f"{chemin} introuvable"
+    quotas = charger_quotas(chemin)
+    assert quotas.apprendre > 0
+    assert quotas.ce_qui_bouge > 0
+    assert quotas.pour_le_metier > 0
+
+
 def test_le_socle_declare_au_moins_un_seuil_de_signal(socle):
     """FR-4 : le seuil de signal est le mécanisme central de la Story 1.4.
     Sans aucune source qui en déclare un, il n'est plus exercé nulle part."""

@@ -20,13 +20,18 @@ from veille.config import SourceConfig, load_sources
 from veille.connectors import json_connector, rss_connector, scrape_connector
 from veille.dedup import RapportDedoublonnage, dedupliquer
 from veille.filter import (
+    DEFAULT_QUOTAS_PATH,
     DEFAULT_SCORING_PATH,
     RapportClassement,
     RapportFiltrageSignal,
+    RapportQuotas,
     charger_ponderations,
+    charger_quotas,
     classer,
     filtrer_par_signal,
     rapport_classement,
+    rapport_quotas,
+    repartir_par_quotas,
 )
 from veille.models import Item
 from veille.profil import DEFAULT_PROFIL_PATH, charger_profil
@@ -55,9 +60,10 @@ class RapportSource:
 
     Deux comptes distincts, parce qu'ils répondent à deux questions
     différentes : ce que la source a **collecté**, et ce qui a **survécu**
-    pour atteindre le digest — dédoublonnage, seuil de signal et scoring
-    par profil confondus (Story 1.4 : `nb_retenus` désigne la contribution
-    finale, pas seulement ce qui a passé le dédoublonnage).
+    pour atteindre le digest — dédoublonnage, seuil de signal, scoring par
+    profil et quotas par registre confondus (`nb_retenus` désigne la
+    contribution finale, redéfini en Story 1.4 puis étendu aux quotas en
+    Story 1.5 — un seul sens à ce champ, jamais deux qui coexistent).
     """
 
     source_id: str
@@ -76,10 +82,10 @@ class RapportSource:
     def est_absorbee(self) -> bool:
         """A collecté, mais rien n'a atteint le digest.
 
-        Le motif peut être le dédoublonnage, le seuil de signal ou le
-        scoring : `nb_retenus` les agrège tous depuis la Story 1.4. C'est
-        au journal de nommer la cause — la déduire du seul dédoublonnage
-        enverrait chercher un doublon qui n'existe pas.
+        Le motif peut être le dédoublonnage, le seuil de signal, le scoring
+        ou un quota de registre dépassé : `nb_retenus` les agrège tous.
+        C'est au journal de nommer la cause — la déduire du seul
+        dédoublonnage enverrait chercher un doublon qui n'existe pas.
         """
         return not self.echec and self.nb_items > 0 and self.nb_retenus == 0
 
@@ -93,6 +99,7 @@ class ResultatCollecte:
     dedoublonnage: RapportDedoublonnage = field(default_factory=RapportDedoublonnage)
     filtrage_signal: RapportFiltrageSignal = field(default_factory=RapportFiltrageSignal)
     classement: RapportClassement = field(default_factory=RapportClassement)
+    quotas: RapportQuotas = field(default_factory=RapportQuotas)
 
     # Un profil sans le moindre mot-clé neutralise le classement en entier.
     # Le récapitulatif d'une telle nuit est sinon indiscernable de celui
@@ -134,6 +141,8 @@ class ResultatCollecte:
                 pertes.append(f"{self.filtrage_signal.total_ecartes} sous le seuil")
             if self.classement.total_ecartes:
                 pertes.append(f"{self.classement.total_ecartes} bruit")
+            if self.quotas.total_ecartes:
+                pertes.append(f"{self.quotas.total_ecartes} hors quota")
             entete += f" — {collectes} collecté(s)"
             if pertes:
                 entete += f", écartés : {', '.join(pertes)}"
@@ -166,6 +175,9 @@ class ResultatCollecte:
         if self.classement.total_ecartes or self.classement.scores_retenus:
             lignes.append(f"  {self.classement.resume()}")
 
+        if self.quotas.retenus_par_registre or self.quotas.total_ecartes:
+            lignes.append(f"  {self.quotas.resume()}")
+
         if self.profil_neutre:
             lignes.append(
                 "  ⚠ Profil neutre : aucun mot-clé chargé — le classement "
@@ -179,6 +191,7 @@ def collecter(
     sources_path: str | Path | None = None,
     profil_path: str | Path | None = None,
     scoring_path: str | Path | None = None,
+    quotas_path: str | Path | None = None,
 ) -> ResultatCollecte:
     """Collecte le socle et rend compte de ce que chaque source a produit.
 
@@ -186,11 +199,12 @@ def collecter(
     configuration : un `sources.yaml` absent ou illisible produit une
     collecte vide et journalisée, jamais un plantage du run entier.
 
-    Pipeline complet (Story 1.4) : collecte → **seuil de signal** →
-    dédoublonnage → **scoring par profil**. Le profil et les pondérations se
-    chargent après la boucle protégée par source : `charger_profil` et
-    `charger_ponderations` ne lèvent jamais, un profil absent ou illisible
-    dégrade vers un classement neutre plutôt que de faire perdre la nuit.
+    Pipeline complet (Story 1.5) : collecte → **seuil de signal** →
+    dédoublonnage → **scoring par profil** → **quotas par registre**. Le
+    profil, les pondérations et les quotas se chargent après la boucle
+    protégée par source : `charger_profil`, `charger_ponderations` et
+    `charger_quotas` ne lèvent jamais, une configuration absente ou
+    illisible dégrade plutôt que de faire perdre la nuit.
 
     Les chemins de configuration sont résolus **à l'appel** et non à
     l'import : leur valeur par défaut reste ainsi substituable, ce qui
@@ -199,6 +213,7 @@ def collecter(
     sources_path = DEFAULT_SOURCES_PATH if sources_path is None else sources_path
     profil_path = DEFAULT_PROFIL_PATH if profil_path is None else profil_path
     scoring_path = DEFAULT_SCORING_PATH if scoring_path is None else scoring_path
+    quotas_path = DEFAULT_QUOTAS_PATH if quotas_path is None else quotas_path
 
     try:
         sources = load_sources(sources_path)
@@ -236,11 +251,15 @@ def collecter(
     ponderations = charger_ponderations(scoring_path)
     items_avant_classement = items
     resultats_classement = classer(items, profil, ponderations)
-    items = [item_score.item for item_score in resultats_classement]
     rapport_classement_obtenu = rapport_classement(items_avant_classement, resultats_classement)
 
-    # Contribution réelle au digest, une fois doublons, seuil de signal et
-    # bruit écartés.
+    quotas = charger_quotas(quotas_path)
+    resultats_repartis = repartir_par_quotas(resultats_classement, quotas)
+    rapport_quotas_obtenu = rapport_quotas(resultats_classement, resultats_repartis)
+    items = [item_score.item for item_score in resultats_repartis]
+
+    # Contribution réelle au digest, une fois doublons, seuil de signal,
+    # bruit et quotas écartés.
     retenus_par_source = Counter(item.source_id for item in items)
 
     rapports = [
@@ -261,6 +280,7 @@ def collecter(
         dedoublonnage=rapport_dedup,
         filtrage_signal=rapport_signal,
         classement=rapport_classement_obtenu,
+        quotas=rapport_quotas_obtenu,
         profil_neutre=profil.est_vide,
     )
     _journaliser(resultat)
@@ -334,6 +354,8 @@ def _journaliser(resultat: ResultatCollecte) -> None:
             motifs.append("seuil de signal")
         if resultat.classement.ecartes_par_source.get(rapport.source_id):
             motifs.append("bruit du profil")
+        if resultat.quotas.ecartes_par_source.get(rapport.source_id):
+            motifs.append("quota de registre dépassé")
 
         logger.warning(
             "Source '%s' absorbée : %d item(s) collecté(s), aucun retenu — %s.",
