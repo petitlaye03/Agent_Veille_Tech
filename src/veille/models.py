@@ -38,3 +38,17 @@ class Item:
                 "date_publication doit être en UTC (voir Consistency "
                 "Conventions de la spine)."
             )
+
+
+@dataclass(frozen=True)
+class Entree:
+    """Ce qu'un `Item` retenu devient une fois enrichi (Story 1.6, FR-7).
+
+    Volontairement minimal : seulement l'item d'origine et son accroche en
+    français. Ne pas ajouter de champ `recommandee` ici — c'est FR-8
+    (Story 1.7), qui n'est pas encore écrite ; l'anticiper serait de la
+    généralité spéculative.
+    """
+
+    item: Item
+    accroche: str

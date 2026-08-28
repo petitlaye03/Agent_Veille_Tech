@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from veille.models import Item
+from veille.models import Entree, Item
 
 
 def _make_item(**overrides):
@@ -61,3 +61,22 @@ def test_signal_peut_etre_declare():
     item = _make_item(signal=18.0)
 
     assert item.signal == 18.0
+
+
+# --- Story 1.6 : le type Entrée ------------------------------------------
+
+
+def test_entree_expose_l_item_et_son_accroche():
+    item = _make_item()
+
+    entree = Entree(item=item, accroche="Une accroche en français.")
+
+    assert entree.item is item
+    assert entree.accroche == "Une accroche en français."
+
+
+def test_entree_est_immuable():
+    entree = Entree(item=_make_item(), accroche="Accroche.")
+
+    with pytest.raises(AttributeError):
+        entree.accroche = "Autre chose"
