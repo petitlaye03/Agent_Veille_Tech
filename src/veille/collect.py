@@ -22,6 +22,7 @@ from veille.dedup import RapportDedoublonnage, dedupliquer
 from veille.filter import (
     DEFAULT_QUOTAS_PATH,
     DEFAULT_SCORING_PATH,
+    ItemScore,
     RapportClassement,
     RapportFiltrageSignal,
     RapportQuotas,
@@ -100,6 +101,14 @@ class ResultatCollecte:
     filtrage_signal: RapportFiltrageSignal = field(default_factory=RapportFiltrageSignal)
     classement: RapportClassement = field(default_factory=RapportClassement)
     quotas: RapportQuotas = field(default_factory=RapportQuotas)
+
+    # Le classement filtré par quota, exposé tel quel (Story 1.8) : sans ce
+    # champ, `pipeline.py` n'a aucun moyen de fournir un `classement` à
+    # `enrich.llm.marquer_recommandation` (FR-8), qui exige explicitement la
+    # population filtrée par quota, pas le classement brut de `classer()`
+    # (précisé en revue de la Story 1.7). Ferme la dette « Score.valeur/motifs
+    # calculé puis jeté » documentée depuis la revue de la Story 1.4.
+    resultats_repartis: list[ItemScore] = field(default_factory=list)
 
     # Un profil sans le moindre mot-clé neutralise le classement en entier.
     # Le récapitulatif d'une telle nuit est sinon indiscernable de celui
@@ -209,6 +218,11 @@ def collecter(
     Les chemins de configuration sont résolus **à l'appel** et non à
     l'import : leur valeur par défaut reste ainsi substituable, ce qui
     empêche un test de se coupler par inadvertance au profil de production.
+
+    `ResultatCollecte.resultats_repartis` (Story 1.8) expose le classement
+    filtré par quota tel quel — c'est ce que `pipeline.py` doit passer à
+    `enrich.llm.marquer_recommandation`, pas `.items` (qui a déjà perdu le
+    `Score`).
     """
     sources_path = DEFAULT_SOURCES_PATH if sources_path is None else sources_path
     profil_path = DEFAULT_PROFIL_PATH if profil_path is None else profil_path
@@ -282,6 +296,7 @@ def collecter(
         classement=rapport_classement_obtenu,
         quotas=rapport_quotas_obtenu,
         profil_neutre=profil.est_vide,
+        resultats_repartis=resultats_repartis,
     )
     _journaliser(resultat)
     return resultat

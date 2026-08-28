@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Veille tech — le digest du jour</title>
+<style>
+  :root {
+    --bg: #fafafa;
+    --fg: #1a1a1a;
+    --accent: #2b6cb0;
+    --muted: #666666;
+    --card-bg: #ffffff;
+    --border: #e2e2e2;
+    --recommandee-bg: #fff8e1;
+    --recommandee-border: #d9a520;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121212;
+      --fg: #eaeaea;
+      --accent: #7db3ff;
+      --muted: #a0a0a0;
+      --card-bg: #1e1e1e;
+      --border: #333333;
+      --recommandee-bg: #2a2410;
+      --recommandee-border: #caa53d;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 1.25rem 1rem 3rem;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.5;
+    max-width: 640px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  header { margin-bottom: 1.75rem; }
+  h1 { font-size: 1.35rem; margin: 0 0 0.3rem; }
+  .horodatage { color: var(--muted); font-size: 0.85rem; margin: 0; }
+  section.registre { margin-bottom: 2rem; }
+  h2.registre-titre {
+    font-size: 1.05rem;
+    margin: 0 0 0.75rem;
+    border-bottom: 2px solid var(--accent);
+    padding-bottom: 0.35rem;
+  }
+  article.entree {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.9rem 1rem;
+    margin-bottom: 0.75rem;
+  }
+  article.entree--recommandee {
+    background: var(--recommandee-bg);
+    border-color: var(--recommandee-border);
+  }
+  .badge-recommandee {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: var(--recommandee-border);
+    margin-bottom: 0.35rem;
+  }
+  .entree-titre { font-weight: 600; margin: 0 0 0.3rem; font-size: 1rem; }
+  .entree-titre a { color: var(--accent); text-decoration: none; }
+  .entree-titre a:hover { text-decoration: underline; }
+  .entree-accroche { margin: 0; color: var(--fg); font-size: 0.95rem; }
+  .digest-vide { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Veille tech</h1>
+  <p class="horodatage">Généré le {{ date_generation.strftime("%d/%m/%Y à %H:%M") }} (heure de Dakar)</p>
+</header>
+{% if digest_vide %}
+<p class="digest-vide">Rien à signaler aujourd'hui — retour demain.</p>
+{% else %}
+  {% for registre, libelle, entrees_section in sections %}
+    {% if entrees_section %}
+    <section class="registre">
+      <h2 class="registre-titre">{{ libelle }}</h2>
+      {% for entree in entrees_section %}
+      <article class="entree{% if entree.recommandee %} entree--recommandee{% endif %}">
+        {% if entree.recommandee %}<span class="badge-recommandee">★ À NE PAS MANQUER</span>{% endif %}
+        <p class="entree-titre">
+          {%- set titre_affiche = entree.item.titre if entree.item.titre else entree.accroche -%}
+          {%- set lien = url_surs(entree.item.url) -%}
+          {%- if lien -%}
+          <a href="{{ lien }}">{{ titre_affiche }}</a>
+          {%- else -%}
+          {{ titre_affiche }}
+          {%- endif -%}
+        </p>
+        <p class="entree-accroche">{{ entree.accroche }}</p>
+      </article>
+      {% endfor %}
+    </section>
+    {% endif %}
+  {% endfor %}
+{% endif %}
+</body>
+</html>

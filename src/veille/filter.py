@@ -461,7 +461,11 @@ class Quotas:
     pour_le_metier: int = 2
 
 
-_CHAMPS_QUOTAS = ("apprendre", "ce_qui_bouge", "pour_le_metier")
+# Ordre canonique des registres — utilisé pour les quotas ici, et réutilisé
+# tel quel par `render.py` (Story 1.8) pour l'ordre d'affichage des sections
+# de la page publiée. Nom public (pas de préfixe `_`) précisément parce que
+# c'est désormais un contrat inter-module, pas un détail interne à ce fichier.
+CHAMPS_QUOTAS = ("apprendre", "ce_qui_bouge", "pour_le_metier")
 
 
 def charger_quotas(chemin: str | Path = DEFAULT_QUOTAS_PATH) -> Quotas:
@@ -500,11 +504,11 @@ def charger_quotas(chemin: str | Path = DEFAULT_QUOTAS_PATH) -> Quotas:
         )
         return Quotas()
 
-    _avertir_cles_inconnues(categories, _CHAMPS_QUOTAS, chemin, "Registre")
+    _avertir_cles_inconnues(categories, CHAMPS_QUOTAS, chemin, "Registre")
 
     valeurs = {
         nom: _quota(categories, nom, getattr(defauts, nom), chemin)
-        for nom in _CHAMPS_QUOTAS
+        for nom in CHAMPS_QUOTAS
     }
     return Quotas(**valeurs)
 
@@ -564,7 +568,7 @@ def repartir_par_quotas(classement: list[ItemScore], quotas: Quotas) -> list[Ite
     pas une insuffisance de contenu, même principe que le signal absent en
     Story 1.4 (AC2).
     """
-    limites = {nom: getattr(quotas, nom) for nom in _CHAMPS_QUOTAS}
+    limites = {nom: getattr(quotas, nom) for nom in CHAMPS_QUOTAS}
 
     retenus: list[ItemScore] = []
     comptes: Counter[str] = Counter()

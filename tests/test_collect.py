@@ -1,7 +1,8 @@
 import textwrap
 from pathlib import Path
 
-from veille.collect import run
+from veille.collect import collecter, run
+from veille.filter import ItemScore
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
@@ -137,6 +138,35 @@ def test_run_collecte_un_socle_melangeant_les_trois_types(tmp_path):
         assert item.titre, f"titre vide pour {item.source_id}"
         assert item.date_publication.tzinfo is not None
         assert item.langue and item.registre
+
+
+# --- Story 1.8 : ResultatCollecte.resultats_repartis --------------------
+
+
+def test_collecter_expose_resultats_repartis(tmp_path):
+    """Sans ce champ, `pipeline.py` n'a aucun moyen de fournir un classement
+    à `marquer_recommandation` — le Score serait calculé puis jeté, comme
+    documenté depuis la revue de la Story 1.4 (`deferred-work.md`)."""
+    sources_yaml = _write_sources_yaml(tmp_path)
+
+    resultat = collecter(sources_yaml)
+
+    assert resultat.resultats_repartis
+    assert all(isinstance(rs, ItemScore) for rs in resultat.resultats_repartis)
+
+
+def test_resultats_repartis_dans_le_meme_ordre_que_items(tmp_path):
+    sources_yaml = _write_sources_yaml(tmp_path)
+
+    resultat = collecter(sources_yaml)
+
+    assert [item_score.item for item_score in resultat.resultats_repartis] == resultat.items
+
+
+def test_resultats_repartis_vide_si_aucune_source_configuree(tmp_path):
+    resultat = collecter(tmp_path / "fichier_qui_n_existe_pas.yaml")
+
+    assert resultat.resultats_repartis == []
 
 
 def test_une_source_defaillante_n_empeche_pas_les_autres_types(tmp_path):
