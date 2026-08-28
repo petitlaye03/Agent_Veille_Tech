@@ -27,13 +27,14 @@ logs/
 # Données personnelles — ne pas publier
 CV_*.pdf
 
-# Outillage BMad (réinstallable via `npx bmad-method install`)
-_bmad/
-.claude/
-
-# Artefacts de planification — contiennent du contexte professionnel personnel.
-# À réintégrer délibérément si le dépôt reste privé ou après relecture.
-_bmad-output/
+# Outillage BMad, skills et artefacts de planification (_bmad/, .claude/,
+# _bmad-output/) : réintégrés le 2026-08-28, fin de la Story 1.7 — dépôt
+# confirmé privé, contenu relu (aucun secret, aucune donnée personnelle
+# sensible). Seuls les fichiers d'exécution locale/personnels ci-dessous
+# restent exclus.
+_bmad/config.user.toml
+_bmad/config.toml.bak
+.claude/scheduled_tasks.lock
 
 # Systèmes d'exploitation / éditeurs
 .DS_Store

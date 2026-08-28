@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:techcafe.fr)",
+      "WebFetch(domain:reliefweb.int)",
+      "Bash(python itunes.py \"Practical AI\" \"TWIML AI podcast\" \"Gradient Dissent\" \"Dwarkesh Podcast\" \"Machine Learning Street Talk\" \"Data Engineering Podcast\" \"MLOps Community podcast\" \"Software Engineering Daily\" \"The Changelog\" \"Syntax web development\")",
+      "WebFetch(domain:deepmind.google)",
+      "Bash(python itunes.py \"Last Week in AI\" \"The Cognitive Revolution AI\" \"No Priors\" \"The AI Daily Brief\" \"Eye on AI\" \"Super Data Science\" \"Data Skeptic\" \"Talk Python To Me\" \"The Gradient Podcast\" \"Brain Inspired\")",
+      "WebFetch(domain:mistral.ai)",
+      "WebFetch(domain:ai.meta.com)",
+      "WebFetch(domain:blogs.nvidia.com)",
+      "WebFetch(domain:www.microsoft.com)",
+      "WebFetch(domain:cohere.com)",
+      "WebFetch(domain:stability.ai)",
+      "WebFetch(domain:rsshub.app)",
+      "WebSearch",
+      "Read(//d//**)",
+      "Bash(uv run *)"
+    ]
+  }
+}
