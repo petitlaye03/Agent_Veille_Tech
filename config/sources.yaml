@@ -40,11 +40,17 @@ sources:
     url: https://huggingface.co/api/daily_papers?limit=50
     langue: en
     registre: apprendre
+    # Médiane mesurée à 3 votes le jour du relevé (addendum du brief) ; 15
+    # retenait 4 papiers sur 26 — la cible « 3-5 marquants » du PRD. Seuil
+    # fixe volontairement simple pour cette story (Story 1.4 Dev Notes) ;
+    # un seuil dynamique (max(10, p80 du jour)) reste une évolution documentée.
+    seuil_signal: 15
     mapping:
       guid: paper.id
       titre: title
       date_publication: publishedAt
       contenu_brut: paper.summary
+      signal: paper.upvotes
     url_modele: https://huggingface.co/papers/{guid}
 
   # --- Scraping ------------------------------------------------------------

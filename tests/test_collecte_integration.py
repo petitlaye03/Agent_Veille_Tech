@@ -100,6 +100,265 @@ class TestDedoublonnageEffectif:
         assert len(resultat.items) + resultat.dedoublonnage.total_ecartes == collectes
 
 
+class TestScoringEffectif:
+    """Tue le mutant « classement court-circuité » (Task 5, Story 1.4) :
+    vérifie que `collecter()` emprunte réellement `profil.md`/`scoring.yaml`
+    plutôt que d'ignorer le résultat de `classer()`."""
+
+    def _socle_rss_simple(self, tmp_path: Path) -> Path:
+        return _socle(
+            tmp_path,
+            f"""
+            sources:
+              - id: source-rss
+                type: rss
+                url: {(FIXTURE_DIR / "sample_feed.xml").as_posix()}
+                langue: fr
+                registre: apprendre
+            """,
+        )
+
+    def _profil(self, tmp_path: Path, contenu: str) -> Path:
+        chemin = tmp_path / "profil.md"
+        chemin.write_text(textwrap.dedent(contenu), encoding="utf-8")
+        return chemin
+
+    def test_un_item_de_bruit_est_ecarte_par_le_chemin_reel(self, tmp_path):
+        """sample_feed.xml contient « Premier article de test » et
+        « Deuxième article de test » : marquer « Deuxième » comme bruit
+        via profil.md doit faire disparaître le second, en passant
+        uniquement par la configuration."""
+        profil = self._profil(
+            tmp_path, "## Bruit — fait descendre ou disparaître\n- Deuxième\n"
+        )
+        socle = self._socle_rss_simple(tmp_path)
+
+        resultat = collecter(socle, profil_path=profil)
+
+        assert [i.titre for i in resultat.items] == ["Premier article de test"]
+        assert resultat.classement.total_ecartes == 1
+
+    def test_un_item_prioritaire_est_place_en_tete_par_le_chemin_reel(self, tmp_path):
+        profil = self._profil(
+            tmp_path, "## Thèmes prioritaires — font monter le score\n- Deuxième\n"
+        )
+        socle = self._socle_rss_simple(tmp_path)
+
+        resultat = collecter(socle, profil_path=profil)
+
+        assert resultat.items[0].titre == "Deuxième article de test"
+
+    def test_nb_retenus_reflete_la_survie_apres_classement_pas_seulement_le_dedoublonnage(
+        self, tmp_path
+    ):
+        """Dev Notes : `nb_retenus` doit refléter la contribution finale au
+        digest, y compris après le scoring — pas seulement le dédoublonnage."""
+        profil = self._profil(
+            tmp_path, "## Bruit — fait descendre ou disparaître\n- Deuxième\n"
+        )
+        socle = self._socle_rss_simple(tmp_path)
+
+        rapport = collecter(socle, profil_path=profil).rapports[0]
+
+        assert rapport.nb_items == 2
+        assert rapport.nb_retenus == 1
+
+    def test_seuil_signal_ecarte_via_le_socle_reel(self, tmp_path):
+        """hf_daily_papers.json a des votes à 1 et 0 : un seuil_signal de 5
+        déclaré dans sources.yaml doit tout écarter, avant même le scoring."""
+        socle = _socle(
+            tmp_path,
+            f"""
+            sources:
+              - id: hf
+                type: json
+                seuil_signal: 5
+                url: {(FIXTURE_DIR / "hf_daily_papers.json").as_uri()}
+                langue: en
+                registre: apprendre
+                mapping:
+                  guid: paper.id
+                  titre: title
+                  contenu_brut: paper.summary
+                  signal: paper.upvotes
+            """,
+        )
+        profil_neutre = self._profil(tmp_path, "")
+
+        resultat = collecter(socle, profil_path=profil_neutre)
+
+        assert resultat.items == []
+        assert resultat.filtrage_signal.ecartes_par_source == {"hf": 2}
+
+    def test_le_resume_rend_compte_du_classement(self, tmp_path):
+        profil = self._profil(
+            tmp_path, "## Bruit — fait descendre ou disparaître\n- Deuxième\n"
+        )
+        socle = self._socle_rss_simple(tmp_path)
+
+        resume = collecter(socle, profil_path=profil).resume()
+
+        # Nommer la source écartée, pas seulement le total (AC7).
+        assert "1 item(s) écarté(s) comme bruit" in resume
+        assert "source-rss (-1)" in resume
+
+    def test_le_fichier_de_ponderations_change_reellement_le_classement(self, tmp_path):
+        """Tue le mutant « scoring.yaml sans effet » : le fichier livré porte
+        les mêmes valeurs que les défauts en dur, si bien que le supprimer ne
+        cassait aucun test. AD-3/AC6 n'étaient satisfaits qu'en apparence."""
+        profil = self._profil(
+            tmp_path,
+            "## Thèmes prioritaires\n- Premier\n\n## Thèmes secondaires\n- Deuxième\n",
+        )
+        socle = self._socle_rss_simple(tmp_path)
+
+        scoring = tmp_path / "scoring.yaml"
+        scoring.write_text(
+            "ponderations:\n  prioritaire: 1\n  secondaire: 100\n", encoding="utf-8"
+        )
+
+        resultat = collecter(socle, profil_path=profil, scoring_path=scoring)
+
+        # « Deuxième » est secondaire, mais pesé 100 contre 1 : il passe devant.
+        assert resultat.items[0].titre == "Deuxième article de test"
+
+    def test_un_profil_neutre_est_signale_dans_le_recapitulatif(self, tmp_path):
+        """Un profil introuvable ou vide désactive le classement en entier.
+        Sans ce signal, la nuit non filtrée se lit comme une nuit saine."""
+        socle = self._socle_rss_simple(tmp_path)
+
+        resultat = collecter(socle, profil_path=tmp_path / "profil-absent.md")
+
+        assert resultat.profil_neutre
+        assert "Profil neutre" in resultat.resume()
+
+    def test_le_recapitulatif_rend_le_total_collecte_meme_sans_doublon(self, tmp_path):
+        """Régression : le total collecté n'apparaissait qu'en cas de doublon,
+        donc les pertes dues au seuil ou au bruit disparaissaient de l'en-tête."""
+        profil = self._profil(tmp_path, "## Bruit\n- Deuxième\n")
+        socle = self._socle_rss_simple(tmp_path)
+
+        resume = collecter(socle, profil_path=profil).resume()
+
+        assert "2 collecté(s)" in resume
+        assert "1 bruit" in resume
+
+
+class TestSeuilDeSignalSurLeSocle:
+    """Le seuil éprouvé **des deux côtés**, via le chemin réel.
+
+    La story exigeait une fixture aux votes variés ; elle n'avait pas été
+    créée, et le seul test d'intégration n'observait que le côté « tout
+    écarté » — aucun test ne montrait un item survivant au-dessus du seuil.
+    """
+
+    def _socle_hf(self, tmp_path: Path, seuil: str) -> Path:
+        return _socle(
+            tmp_path,
+            f"""
+            sources:
+              - id: hf
+                type: json
+                {seuil}
+                url: {(FIXTURE_DIR / "hf_daily_papers_votes.json").as_uri()}
+                langue: en
+                registre: apprendre
+                mapping:
+                  guid: paper.id
+                  titre: title
+                  date_publication: publishedAt
+                  contenu_brut: paper.summary
+                  signal: paper.upvotes
+            """,
+        )
+
+    def _profil_neutre(self, tmp_path: Path) -> Path:
+        chemin = tmp_path / "profil.md"
+        chemin.write_text("## Posture\n- rien\n", encoding="utf-8")
+        return chemin
+
+    def test_le_seuil_garde_les_items_au_dessus_et_ecarte_ceux_en_dessous(self, tmp_path):
+        """Votes de la fixture : 45, 24, 15, 11, 3, 0 — seuil à 15."""
+        socle = self._socle_hf(tmp_path, "seuil_signal: 15")
+
+        resultat = collecter(socle, profil_path=self._profil_neutre(tmp_path))
+
+        assert sorted(i.signal for i in resultat.items) == [15.0, 24.0, 45.0]
+        assert resultat.filtrage_signal.ecartes_par_source == {"hf": 3}
+
+    def test_sans_seuil_declare_tous_les_items_sont_conserves(self, tmp_path):
+        """AC2 : le filtrage par signal n'est jamais implicite."""
+        socle = self._socle_hf(tmp_path, "")
+
+        resultat = collecter(socle, profil_path=self._profil_neutre(tmp_path))
+
+        assert len(resultat.items) == 6
+        assert resultat.filtrage_signal.total_ecartes == 0
+
+    def test_relever_le_seuil_ecarte_davantage(self, tmp_path):
+        """AC6 : changer le seuil dans le YAML change le résultat, sans code."""
+        strict = collecter(
+            self._socle_hf(tmp_path, "seuil_signal: 25"),
+            profil_path=self._profil_neutre(tmp_path),
+        )
+
+        assert [i.signal for i in strict.items] == [45.0]
+
+
+class TestOrdreDuPipeline:
+    """Le seuil de signal s'applique AVANT le dédoublonnage (revue 2026-08-28).
+
+    Le seuil est déclaré *par source* : chaque item doit être jugé sur le
+    seuil de la sienne. Dans l'ordre inverse, l'élection d'un gagnant
+    faisait disparaître un article auquel aucun seuil ne s'appliquait.
+    """
+
+    def test_le_seuil_d_une_source_n_ampute_pas_une_autre(self, tmp_path):
+        """Deux sources relaient le même article. Celle qui porte un seuil a
+        la priorité la plus haute et son signal est sous le seuil ; la copie
+        sans seuil doit survivre."""
+        payload = tmp_path / "avec_signal.json"
+        payload.write_text(
+            '[{"id": "art-1", "titre": "Article relayé", "votes": 3}]', encoding="utf-8"
+        )
+        sans_signal = tmp_path / "sans_signal.json"
+        sans_signal.write_text(
+            '[{"id": "art-1", "titre": "Article relayé"}]', encoding="utf-8"
+        )
+
+        socle = _socle(
+            tmp_path,
+            f"""
+            sources:
+              - id: avec-seuil
+                type: json
+                priorite: 9
+                seuil_signal: 15
+                url: {payload.as_uri()}
+                langue: fr
+                registre: apprendre
+                mapping: {{guid: id, titre: titre, signal: votes}}
+                url_modele: https://exemple.invalid/{{guid}}
+              - id: sans-seuil
+                type: json
+                priorite: 1
+                url: {sans_signal.as_uri()}
+                langue: fr
+                registre: apprendre
+                mapping: {{guid: id, titre: titre}}
+                url_modele: https://exemple.invalid/{{guid}}
+            """,
+        )
+        profil = tmp_path / "profil.md"
+        profil.write_text("## Posture\n- rien\n", encoding="utf-8")
+
+        resultat = collecter(socle, profil_path=profil)
+
+        assert [i.source_id for i in resultat.items] == ["sans-seuil"], (
+            "l'article a disparu : le seuil de 'avec-seuil' a amputé 'sans-seuil'"
+        )
+
+
 class TestVisibiliteDuTriExcessif:
     """AC4 : une source entièrement absorbée ne doit pas passer pour saine."""
 

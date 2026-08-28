@@ -1,0 +1,121 @@
+<!--
+  Profil vivant, lu par le pipeline à chaque run (AD-3, Story 1.4).
+
+  Éditer ce fichier suffit à changer le classement — aucune modification de
+  code n'est nécessaire. Un mot-clé ajouté sous un thème prioritaire fait
+  monter les items qui le contiennent ; un mot-clé ajouté sous « Bruit » les
+  fait descendre ou disparaître.
+
+  Poids réels de chaque section (déclarés dans `config/scoring.yaml`, et
+  modifiables là-bas) :
+
+      Signal fort            +15   le plus fort
+      Thèmes prioritaires    +10
+      Domaines d'application  +5   moitié moins qu'un thème prioritaire
+      Thèmes secondaires      +2   un appoint
+      Bruit                  −20   pénalité ; sous −5 au total, l'item disparaît
+
+  Deux règles de cumul à connaître avant d'éditer :
+  - Un même terme placé dans deux sections ne compte **qu'une fois**, au
+    poids de la section la plus lourde. Le répéter ne le renforce pas.
+  - Les mots-clés suivants d'une même section comptent de moins en moins
+    (le 2ᵉ pour moitié, le 3ᵉ pour un quart) : toucher plusieurs thèmes
+    compte, mais empiler des termes génériques ne bat pas la pertinence.
+
+  Écrire des MOTS-CLÉS, jamais des phrases : un mot-clé n'agit que s'il peut
+  réellement apparaître dans le titre ou le résumé d'un article. Le singulier
+  et le pluriel sont équivalents (« agent » trouve « agents »).
+
+  Le fichier d'origine (co-écrit le 2026-07-24) reste dans
+  `_bmad-output/planning-artifacts/prds/.../profil-draft.md` en artefact de
+  planification — ce n'est plus lui qui est lu par le code.
+-->
+
+# Profil d'Abdoulaye — ce qui pilote le tri
+
+> Premier jet à corriger. Ce fichier décide de ce que l'agent garde ou jette.
+> Règle : un item proche des **thèmes prioritaires** monte ; un item dans le **bruit** descend ou disparaît.
+
+## Posture
+
+- Junior Data Scientist à Dakar, en fin de premier stage (nov. 2026).
+- Vise : **AI/LLM Engineer, ML Engineer, Data Scientist, Data Engineer**.
+- Objectif de la veille : **combler l'écart entre mon profil et ces postes**, et progresser techniquement d'ici novembre.
+- Niveau : **me tirer vers le haut.** Ne pas rester dans ma zone de confort — proposer des choses exigeantes (papiers pointus, sujets avancés) même si je ne comprends pas tout. Les sources pédagogiques (StatQuest, 3Blue1Brown…) servent de rampe d'accès pour rendre le difficile atteignable, pas de plafond.
+- Langues : français et anglais à égalité.
+
+## Thèmes prioritaires — font monter le score
+
+**RAG & retrieval** *(mon terrain — chatbot juridique en RAG hybride : Milvus, Ollama, BGE-M3, RRF)*
+- RAG, hybrid search, reranking, vector databases, embeddings, retrieval evaluation
+
+**LLM appliqué / AI engineering**
+- fine-tuning, LoRA/PEFT, quantization, inference (vLLM, Ollama), function calling, prompt engineering, RLHF
+- LLM open source (Mistral, Llama, Qwen…), modèles qu'on peut faire tourner localement
+
+**Agents IA / systèmes agentiques** *(le thème le plus chaud de 2026, très demandé en entretien AI Engineer)*
+- agents, tool use, planification, orchestration multi-agents, function calling, MCP
+
+**Évaluation des LLM & RAG (evals)** *(pile dans mon terrain retrieval, très recherché en production)*
+- evals, retrieval evaluation, benchmarks, mesure de qualité, tests de modèles
+
+**MLOps & mise en production**
+- déploiement de modèles, serving, monitoring, evals, pipelines ML, Docker/Kubernetes
+
+**Data engineering**
+- Spark, dbt, DuckDB, Polars, orchestration (Airflow/Dagster), pipelines de données
+
+**Fondamentaux ML** *(pour consolider les bases)*
+- machine learning classique, statistiques, deep learning, computer vision
+
+**IA générative multimodale** *(vague montante que je veux explorer)*
+- génération d'image et de vidéo, modèles de diffusion, multimodal (texte+image+audio), speech/audio *(j'ai utilisé Vosk dans mon projet)*
+
+**Cybersécurité & cloud**
+- sécurité, cloud (AWS/GCP/Azure), infrastructure, DevOps
+
+## Domaines d'application privilégiés
+- **Finance** — data/IA appliquée à la finance
+- **Multimédia** — traitement et génération de contenu image/vidéo/audio
+
+## Thèmes secondaires — intéressants, score modéré
+
+- Actualité des labos (OpenAI, Anthropic, DeepMind, Mistral) : sorties de modèles, annonces
+- Outils et frameworks Python nouveaux
+- Rapports de force entre modèles (classements, benchmarks sérieux)
+- Réglementation IA (AI Act) — utile pour le contexte, sans dominer
+- IA responsable : biais, équité, explicabilité, gouvernance des modèles
+
+## Bruit — fait descendre ou disparaître
+
+<!--
+  Écrire ici des MOTS-CLÉS, pas des phrases. Un mot-clé n'agit que s'il peut
+  réellement apparaître dans le titre ou le résumé d'un article : « levée de
+  fonds » fonctionne, « actualité business pure sans contenu technique » ne
+  correspondra jamais à rien. Un terme par intention, séparés par des virgules.
+-->
+
+**Crypto & Web3**
+- crypto, cryptomonnaie, blockchain, NFT, Web3, bitcoin, ethereum, token
+
+**Business pur, sans contenu technique**
+- levée de fonds, funding, fundraising, valorisation, valuation, licorne, unicorn
+- série A, série B, seed round, IPO, acquisition, rachat
+
+**Hype et prédictions vagues**
+- hype, révolution, révolutionnaire, game changer, disruption, disruptif
+- va tout changer, tout va changer, futur de l'humanité
+
+**Produit commercial et marketing**
+- marketing, publicité, publicitaire, promotion, sponsorisé, partenariat commercial
+- SaaS, offre commerciale, tarification, pricing, abonnement
+
+**Actualité conso**
+- smartphone, tablette, gadget, montre connectée, wearable, écouteurs
+- test produit, comparatif produit
+
+## Signal fort — à privilégier quand ça apparaît
+
+- Compétitions Kaggle en NLP / data science *(ce que le marché veut savoir résoudre)*
+- Offres et compétences qui reviennent pour les postes AI/ML Engineer
+- Contenu directement lié au RAG / retrieval *(mon atout à valoriser en entretien)*

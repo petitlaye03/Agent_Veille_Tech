@@ -88,3 +88,61 @@ def test_chaque_source_declare_une_priorite(socle):
         f"sources sans priorité explicite : {sans_priorite} — "
         "le départage du dédoublonnage serait alors implicite"
     )
+
+
+# --- Garde-fous sur le seuil de signal (revue 2026-08-28) ---------------
+#
+# Ces livrables de configuration des Tasks 0 et 2bis pouvaient être retirés
+# de `sources.yaml` sans qu'aucun test ne bronche : l'audit par mutation
+# n'avait porté que sur le code, jamais sur la configuration.
+
+
+def test_le_fichier_de_ponderations_existe_et_se_charge():
+    """`config/scoring.yaml` porte les mêmes valeurs que les défauts en dur :
+    le supprimer serait donc sans effet observable, et passerait inaperçu.
+    Ce garde-fou rend la disparition du livrable visible (AD-3)."""
+    from veille.filter import charger_ponderations
+
+    chemin = RACINE_PROJET / "config" / "scoring.yaml"
+
+    assert chemin.is_file(), f"{chemin} introuvable"
+    ponderations = charger_ponderations(chemin)
+    assert ponderations.prioritaire > 0
+    assert ponderations.bruit < 0
+    assert ponderations.signal_fort > ponderations.secondaire
+
+
+def test_le_socle_declare_au_moins_un_seuil_de_signal(socle):
+    """FR-4 : le seuil de signal est le mécanisme central de la Story 1.4.
+    Sans aucune source qui en déclare un, il n'est plus exercé nulle part."""
+    avec_seuil = [s.id for s in socle if s.seuil_signal is not None]
+
+    assert avec_seuil, (
+        "aucune source ne déclare de seuil_signal — FR-4 n'est plus exercé "
+        "par le socle réel"
+    )
+
+
+def test_une_source_a_seuil_declare_extrait_bien_un_signal(socle):
+    """Un seuil sur une source qui ne produit aucun signal est inerte : le
+    rapport afficherait « 0 écarté », qui se lit « rien n'était sous le
+    seuil » alors que le filtre n'a jamais tourné."""
+    for source in (s for s in socle if s.seuil_signal is not None):
+        assert source.type == "json", (
+            f"{source.id} : seuil_signal déclaré sur un type '{source.type}', "
+            "qui ne renseigne jamais Item.signal"
+        )
+        assert source.mapping.get("signal"), (
+            f"{source.id} : seuil_signal déclaré sans 'mapping.signal' — "
+            "le filtre ne pourra rien écarter"
+        )
+
+
+def test_un_mapping_signal_s_accompagne_d_un_seuil(socle):
+    """La réciproque : extraire un signal sans jamais s'en servir signale un
+    seuil oublié lors d'une édition."""
+    for source in (s for s in socle if s.mapping.get("signal")):
+        assert source.seuil_signal is not None, (
+            f"{source.id} : 'mapping.signal' déclaré sans seuil_signal — "
+            "le signal est extrait puis ignoré"
+        )

@@ -19,7 +19,17 @@ from pathlib import Path
 from veille.config import SourceConfig, load_sources
 from veille.connectors import json_connector, rss_connector, scrape_connector
 from veille.dedup import RapportDedoublonnage, dedupliquer
+from veille.filter import (
+    DEFAULT_SCORING_PATH,
+    RapportClassement,
+    RapportFiltrageSignal,
+    charger_ponderations,
+    classer,
+    filtrer_par_signal,
+    rapport_classement,
+)
 from veille.models import Item
+from veille.profil import DEFAULT_PROFIL_PATH, charger_profil
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +55,9 @@ class RapportSource:
 
     Deux comptes distincts, parce qu'ils répondent à deux questions
     différentes : ce que la source a **collecté**, et ce qui a **survécu**
-    au dédoublonnage pour atteindre le digest.
+    pour atteindre le digest — dédoublonnage, seuil de signal et scoring
+    par profil confondus (Story 1.4 : `nb_retenus` désigne la contribution
+    finale, pas seulement ce qui a passé le dédoublonnage).
     """
 
     source_id: str
@@ -64,9 +76,10 @@ class RapportSource:
     def est_absorbee(self) -> bool:
         """A collecté, mais rien n'a atteint le digest.
 
-        Une source entièrement absorbée par le dédoublonnage n'apporte
-        rien : c'est soit un doublon intégral d'une autre, soit un tri
-        excessif. Dans les deux cas, il faut le voir.
+        Le motif peut être le dédoublonnage, le seuil de signal ou le
+        scoring : `nb_retenus` les agrège tous depuis la Story 1.4. C'est
+        au journal de nommer la cause — la déduire du seul dédoublonnage
+        enverrait chercher un doublon qui n'existe pas.
         """
         return not self.echec and self.nb_items > 0 and self.nb_retenus == 0
 
@@ -78,6 +91,13 @@ class ResultatCollecte:
     items: list[Item] = field(default_factory=list)
     rapports: list[RapportSource] = field(default_factory=list)
     dedoublonnage: RapportDedoublonnage = field(default_factory=RapportDedoublonnage)
+    filtrage_signal: RapportFiltrageSignal = field(default_factory=RapportFiltrageSignal)
+    classement: RapportClassement = field(default_factory=RapportClassement)
+
+    # Un profil sans le moindre mot-clé neutralise le classement en entier.
+    # Le récapitulatif d'une telle nuit est sinon indiscernable de celui
+    # d'une nuit filtrée normalement.
+    profil_neutre: bool = False
 
     @property
     def sources_en_echec(self) -> list[RapportSource]:
@@ -102,12 +122,21 @@ class ResultatCollecte:
             return "Aucune source configurée."
 
         entete = f"Collecte : {len(self.items)} item(s) depuis {len(self.rapports)} source(s)"
-        if self.dedoublonnage.total_ecartes:
-            collectes = sum(r.nb_items for r in self.rapports)
-            entete += (
-                f" — {collectes} collecté(s), "
-                f"{self.dedoublonnage.total_ecartes} doublon(s) écarté(s)"
-            )
+        collectes = sum(r.nb_items for r in self.rapports)
+        # Le total collecté figure dès qu'il diffère du total retenu, quelle
+        # que soit l'étape responsable : le rapporter seulement en cas de
+        # doublon masquait les pertes dues au seuil de signal et au bruit.
+        if collectes != len(self.items):
+            pertes = []
+            if self.dedoublonnage.total_ecartes:
+                pertes.append(f"{self.dedoublonnage.total_ecartes} doublon(s)")
+            if self.filtrage_signal.total_ecartes:
+                pertes.append(f"{self.filtrage_signal.total_ecartes} sous le seuil")
+            if self.classement.total_ecartes:
+                pertes.append(f"{self.classement.total_ecartes} bruit")
+            entete += f" — {collectes} collecté(s)"
+            if pertes:
+                entete += f", écartés : {', '.join(pertes)}"
         lignes = [entete]
 
         for rapport in sorted(self.rapports, key=lambda r: (-r.nb_retenus, -r.nb_items)):
@@ -131,16 +160,46 @@ class ResultatCollecte:
         if self.dedoublonnage.total_ecartes:
             lignes.append(f"  {self.dedoublonnage.resume()}")
 
+        if self.filtrage_signal.total_ecartes:
+            lignes.append(f"  {self.filtrage_signal.resume()}")
+
+        if self.classement.total_ecartes or self.classement.scores_retenus:
+            lignes.append(f"  {self.classement.resume()}")
+
+        if self.profil_neutre:
+            lignes.append(
+                "  ⚠ Profil neutre : aucun mot-clé chargé — le classement "
+                "par pertinence n'a PAS été appliqué."
+            )
+
         return "\n".join(lignes)
 
 
-def collecter(sources_path: str | Path = DEFAULT_SOURCES_PATH) -> ResultatCollecte:
+def collecter(
+    sources_path: str | Path | None = None,
+    profil_path: str | Path | None = None,
+    scoring_path: str | Path | None = None,
+) -> ResultatCollecte:
     """Collecte le socle et rend compte de ce que chaque source a produit.
 
     L'isolation de panne (AD-6) couvre aussi le chargement de la
     configuration : un `sources.yaml` absent ou illisible produit une
     collecte vide et journalisée, jamais un plantage du run entier.
+
+    Pipeline complet (Story 1.4) : collecte → **seuil de signal** →
+    dédoublonnage → **scoring par profil**. Le profil et les pondérations se
+    chargent après la boucle protégée par source : `charger_profil` et
+    `charger_ponderations` ne lèvent jamais, un profil absent ou illisible
+    dégrade vers un classement neutre plutôt que de faire perdre la nuit.
+
+    Les chemins de configuration sont résolus **à l'appel** et non à
+    l'import : leur valeur par défaut reste ainsi substituable, ce qui
+    empêche un test de se coupler par inadvertance au profil de production.
     """
+    sources_path = DEFAULT_SOURCES_PATH if sources_path is None else sources_path
+    profil_path = DEFAULT_PROFIL_PATH if profil_path is None else profil_path
+    scoring_path = DEFAULT_SCORING_PATH if scoring_path is None else scoring_path
+
     try:
         sources = load_sources(sources_path)
     except Exception as e:  # noqa: BLE001 — isolation de panne (AD-6)
@@ -160,11 +219,28 @@ def collecter(sources_path: str | Path = DEFAULT_SOURCES_PATH) -> ResultatCollec
         items.extend(items_source)
         collecte_par_source.append((source_config, items_source, echec))
 
+    # Le seuil de signal passe **avant** le dédoublonnage : il est déclaré
+    # par source, donc chaque item doit être jugé sur le seuil de la sienne.
+    # Dans l'ordre inverse, l'élection d'un gagnant pouvait faire disparaître
+    # un article auquel aucun seuil ne s'appliquait, parce que la copie
+    # retenue venait d'une source qui, elle, en portait un.
+    items, rapport_signal = filtrer_par_signal(
+        items, sources={s.id: s for s in sources}
+    )
+
     items, rapport_dedup = dedupliquer(
         items, priorites={s.id: s.priorite for s in sources}
     )
 
-    # Contribution réelle au digest, une fois les doublons écartés.
+    profil = charger_profil(profil_path)
+    ponderations = charger_ponderations(scoring_path)
+    items_avant_classement = items
+    resultats_classement = classer(items, profil, ponderations)
+    items = [item_score.item for item_score in resultats_classement]
+    rapport_classement_obtenu = rapport_classement(items_avant_classement, resultats_classement)
+
+    # Contribution réelle au digest, une fois doublons, seuil de signal et
+    # bruit écartés.
     retenus_par_source = Counter(item.source_id for item in items)
 
     rapports = [
@@ -180,13 +256,18 @@ def collecter(sources_path: str | Path = DEFAULT_SOURCES_PATH) -> ResultatCollec
     ]
 
     resultat = ResultatCollecte(
-        items=items, rapports=rapports, dedoublonnage=rapport_dedup
+        items=items,
+        rapports=rapports,
+        dedoublonnage=rapport_dedup,
+        filtrage_signal=rapport_signal,
+        classement=rapport_classement_obtenu,
+        profil_neutre=profil.est_vide,
     )
     _journaliser(resultat)
     return resultat
 
 
-def run(sources_path: str | Path = DEFAULT_SOURCES_PATH) -> list[Item]:
+def run(sources_path: str | Path | None = None) -> list[Item]:
     """Collecte les Items de toutes les sources actives du socle."""
     return collecter(sources_path).items
 
@@ -243,11 +324,22 @@ def _journaliser(resultat: ResultatCollecte) -> None:
         )
 
     for rapport in resultat.sources_absorbees:
+        # Nommer l'étape responsable : les trois causes appellent des
+        # corrections opposées (retirer une source redondante, abaisser un
+        # seuil, revoir le profil).
+        motifs = []
+        if resultat.dedoublonnage.ecartes_par_source.get(rapport.source_id):
+            motifs.append("doublons")
+        if resultat.filtrage_signal.ecartes_par_source.get(rapport.source_id):
+            motifs.append("seuil de signal")
+        if resultat.classement.ecartes_par_source.get(rapport.source_id):
+            motifs.append("bruit du profil")
+
         logger.warning(
-            "Source '%s' absorbée : %d item(s) collecté(s), aucun retenu après "
-            "dédoublonnage — doublon intégral d'une autre source, ou tri excessif.",
+            "Source '%s' absorbée : %d item(s) collecté(s), aucun retenu — %s.",
             rapport.source_id,
             rapport.nb_items,
+            f"écartés par : {', '.join(motifs)}" if motifs else "cause indéterminée",
         )
 
     for rapport in resultat.rapports:

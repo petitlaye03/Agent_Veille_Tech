@@ -104,3 +104,73 @@ def test_fichier_absent_leve_une_erreur_explicite(tmp_path):
     """load_sources reste stricte ; c'est `collect.run` qui absorbe l'échec."""
     with pytest.raises(FileNotFoundError):
         load_sources(tmp_path / "inexistant.yaml")
+
+
+# --- Validation de `seuil_signal` (revue 2026-08-28) --------------------
+#
+# `sources.yaml` est édité à la main (AD-3) : une faute de frappe y est un
+# incident attendu. Une valeur mal typée levait auparavant une TypeError à
+# la comparaison, bien plus loin dans le pipeline et hors de l'isolation de
+# panne par source — au prix de la nuit entière.
+
+
+def _socle_avec_seuil(tmp_path, valeur: str):
+    sources_yaml = tmp_path / "sources.yaml"
+    sources_yaml.write_text(
+        textwrap.dedent(
+            f"""
+            sources:
+              - id: source-seuil
+                type: json
+                url: https://example.invalid/api
+                langue: fr
+                registre: apprendre
+                seuil_signal: {valeur}
+            """
+        ),
+        encoding="utf-8",
+    )
+    return load_sources(sources_yaml)[0]
+
+
+def test_un_seuil_signal_numerique_est_conserve(tmp_path):
+    assert _socle_avec_seuil(tmp_path, "15").seuil_signal == 15.0
+
+
+def test_un_seuil_signal_non_numerique_est_neutralise(tmp_path):
+    """La source reste chargée — seul le seuil est abandonné : perdre la
+    source entière pour un seuil illisible serait pire que le mal."""
+    source = _socle_avec_seuil(tmp_path, "quinze")
+
+    assert source.seuil_signal is None
+    assert source.id == "source-seuil"
+
+
+def test_un_seuil_signal_booleen_est_neutralise(tmp_path):
+    """`yes` vaut `True` en YAML : `float(True)` donnerait un seuil de 1.0."""
+    assert _socle_avec_seuil(tmp_path, "yes").seuil_signal is None
+
+
+def test_un_seuil_signal_nan_est_neutralise(tmp_path):
+    """Toute comparaison à `nan` étant fausse, un tel seuil laisserait
+    passer l'intégralité des items sans le moindre signe."""
+    assert _socle_avec_seuil(tmp_path, ".nan").seuil_signal is None
+
+
+def test_un_seuil_signal_invalide_n_empeche_pas_la_collecte(tmp_path):
+    """Le scénario complet : le pipeline ne doit pas lever."""
+    from veille.filter import filtrer_par_signal
+    from veille.models import Item
+    from datetime import datetime, timezone
+
+    source = _socle_avec_seuil(tmp_path, "quinze")
+    item = Item(
+        source_id="source-seuil", guid="g", titre="t",
+        date_publication=datetime(2026, 8, 1, tzinfo=timezone.utc),
+        langue="fr", registre="apprendre", url="u", contenu_brut="", signal=3.0,
+    )
+
+    retenus, rapport = filtrer_par_signal([item], {"source-seuil": source})
+
+    assert retenus == [item]
+    assert rapport.total_ecartes == 0

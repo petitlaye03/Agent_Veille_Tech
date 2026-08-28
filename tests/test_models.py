@@ -47,3 +47,17 @@ def test_date_publication_doit_etre_en_utc():
 
     with pytest.raises(ValueError):
         _make_item(date_publication=non_utc)
+
+
+def test_signal_est_absent_par_defaut():
+    """Amendement AD-4 (2026-08-27) : signal est un champ optionnel, neutre
+    par défaut — une source qui n'en fournit pas ne doit rien remarquer."""
+    item = _make_item()
+
+    assert item.signal is None
+
+
+def test_signal_peut_etre_declare():
+    item = _make_item(signal=18.0)
+
+    assert item.signal == 18.0

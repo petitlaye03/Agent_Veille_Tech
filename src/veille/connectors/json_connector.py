@@ -121,7 +121,26 @@ def _to_item(entree: dict, source_config: SourceConfig) -> Item:
         registre=source_config.registre,
         url=url,
         contenu_brut=str(_champ(entree, mapping, "contenu_brut") or ""),
+        signal=_to_signal(_champ(entree, mapping, "signal")),
     )
+
+
+def _to_signal(valeur: Any) -> float | None:
+    """Convertit le signal en `float`.
+
+    Une valeur absente ou non numérique (mapping non déclaré, ou API qui
+    renvoie autre chose qu'un nombre) doit dégrader vers `None`, jamais
+    lever : le signal est une donnée d'appoint, pas un champ requis.
+    """
+    if valeur is None or isinstance(valeur, bool):
+        return None
+    if isinstance(valeur, (int, float)):
+        return float(valeur)
+    try:
+        return float(str(valeur))
+    except ValueError:
+        logger.warning("Signal non numérique ignoré (%r).", valeur)
+        return None
 
 
 def _to_utc_datetime(valeur: Any) -> datetime:

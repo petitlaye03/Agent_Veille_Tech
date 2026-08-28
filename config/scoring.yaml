@@ -1,0 +1,17 @@
+# Pondérations du scoring par profil (AD-3, Story 1.4).
+#
+# Modifier une valeur ici change le classement sans toucher au code. Un
+# fichier absent ou illisible retombe sur les mêmes valeurs par défaut
+# (voir `Ponderations` dans src/veille/filter.py).
+#
+# seuil_bruit : score en dessous duquel un item est écarté du digest,
+# pas seulement rétrogradé.
+
+ponderations:
+  prioritaire: 10
+  signal_fort: 15
+  domaine: 5
+  secondaire: 2
+  bruit: -20
+
+seuil_bruit: -5

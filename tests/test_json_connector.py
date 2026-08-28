@@ -130,6 +130,62 @@ def test_un_identifiant_numerique_zero_reste_valide(tmp_path):
     assert [i.guid for i in items] == ["0", "1"]
 
 
+def test_signal_extrait_du_mapping_quand_declare():
+    """Task 0 (Story 1.4) : mapping.signal, une fois déclaré, alimente Item.signal."""
+    source = SourceConfig(
+        id="hf-daily-papers",
+        type="json",
+        url=(FIXTURE_DIR / "hf_daily_papers.json").as_uri(),
+        langue="en",
+        registre="apprendre",
+        mapping={
+            "guid": "paper.id",
+            "titre": "title",
+            "date_publication": "publishedAt",
+            "contenu_brut": "paper.summary",
+            "signal": "paper.upvotes",
+        },
+        url_modele="https://huggingface.co/papers/{guid}",
+    )
+
+    items = fetch(source)
+
+    assert items[0].signal == 1.0
+    assert items[1].signal == 0.0
+
+
+def test_signal_absent_du_mapping_reste_none():
+    """Une source sans mapping.signal ne doit rien remarquer (champ optionnel)."""
+    source = _hf_source((FIXTURE_DIR / "hf_daily_papers.json").as_uri())
+
+    items = fetch(source)
+
+    assert all(item.signal is None for item in items)
+
+
+def test_signal_non_numerique_est_ignore_sans_lever(tmp_path):
+    """Une valeur de signal non numérique ne doit ni lever ni perdre l'entrée."""
+    payload = tmp_path / "signal_invalide.json"
+    payload.write_text(
+        '[{"id": "abc-1", "titre": "Titre", "score": "beaucoup"}]',
+        encoding="utf-8",
+    )
+
+    source = SourceConfig(
+        id="signal-invalide",
+        type="json",
+        url=payload.as_uri(),
+        langue="fr",
+        registre="apprendre",
+        mapping={"guid": "id", "titre": "titre", "signal": "score"},
+    )
+
+    items = fetch(source)
+
+    assert len(items) == 1
+    assert items[0].signal is None
+
+
 def test_une_entree_incomplete_est_ignoree_sans_perdre_les_autres(tmp_path):
     payload = tmp_path / "partiel.json"
     payload.write_text(

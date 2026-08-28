@@ -1,0 +1,56 @@
+[
+  {
+    "title": "Scaling Retrieval-Augmented Generation to Billion-Document Corpora",
+    "publishedAt": "2026-08-20T20:00:00.000Z",
+    "paper": {
+      "id": "2608.10001",
+      "summary": "We study how hybrid retrieval behaves when the corpus grows past a billion documents, and show that reranking budget matters more than index size.",
+      "upvotes": 45
+    }
+  },
+  {
+    "title": "A Practical Guide to Evaluating Agentic Tool Use",
+    "publishedAt": "2026-08-20T20:00:00.000Z",
+    "paper": {
+      "id": "2608.10002",
+      "summary": "We propose an evaluation harness for agents that call external tools, separating planning failures from execution failures.",
+      "upvotes": 24
+    }
+  },
+  {
+    "title": "Quantization-Aware Fine-Tuning for Small Language Models",
+    "publishedAt": "2026-08-20T20:00:00.000Z",
+    "paper": {
+      "id": "2608.10003",
+      "summary": "A recipe for fine-tuning under 4-bit quantization without the usual degradation on reasoning benchmarks.",
+      "upvotes": 15
+    }
+  },
+  {
+    "title": "On the Curious Stability of Learning Rate Warmup",
+    "publishedAt": "2026-08-20T20:00:00.000Z",
+    "paper": {
+      "id": "2608.10004",
+      "summary": "An empirical study of warmup schedules across optimizers.",
+      "upvotes": 11
+    }
+  },
+  {
+    "title": "Notes on Sparse Attention Kernels",
+    "publishedAt": "2026-08-20T20:00:00.000Z",
+    "paper": {
+      "id": "2608.10005",
+      "summary": "Implementation notes for sparse attention on consumer GPUs.",
+      "upvotes": 3
+    }
+  },
+  {
+    "title": "A Minor Correction to an Earlier Benchmark",
+    "publishedAt": "2026-08-20T20:00:00.000Z",
+    "paper": {
+      "id": "2608.10006",
+      "summary": "We correct a table in a previously published benchmark.",
+      "upvotes": 0
+    }
+  }
+]
