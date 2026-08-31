@@ -1,7 +1,9 @@
-"""Tests de la publication (AD-8, Story 1.8) — aucun appel réseau ni
-subprocess réel : client HTTP simulé, résolution de jeton monkeypatchée."""
+"""Tests de la publication (AD-8, Story 1.8 ; archive Markdown, Story 1.9) —
+aucun appel réseau ni subprocess réel : client HTTP simulé, résolution de
+jeton monkeypatchée."""
 
 import base64
+from datetime import date
 
 import httpx
 import pytest
@@ -47,7 +49,7 @@ class _FakeClient:
 def reset_avertissements(monkeypatch):
     """Les avertissements one-shot du module ne doivent pas fuiter d'un test à l'autre."""
     monkeypatch.setattr(publish, "_avertissement_jeton_absent_emis", False)
-    monkeypatch.setattr(publish, "_avertissement_echec_publication_emis", False)
+    monkeypatch.setattr(publish, "_categories_echec_avec_trace_emise", set())
 
 
 # --- Résolution du jeton --------------------------------------------------
@@ -155,3 +157,88 @@ def test_publier_ne_ferme_pas_un_client_fourni_explicitement():
     publish.publier("<html></html>", client=client)
 
     assert client.closed is False
+
+
+# --- publier_archive() (Story 1.9) -----------------------------------------
+
+
+def test_publier_archive_cree_le_fichier_au_bon_chemin_date():
+    client = _FakeClient(get_response=_FakeResponse(404), put_response=_FakeResponse(201))
+
+    ok = publish.publier_archive("# Digest\n", date(2026, 8, 28), client=client)
+
+    assert ok is True
+    url, corps = client.put_calls[0]
+    assert url.endswith("/contents/site/archive/2026-08-28.md")
+    assert "sha" not in corps
+    assert base64.b64decode(corps["content"]).decode("utf-8") == "# Digest\n"
+
+
+def test_publier_archive_met_a_jour_l_archive_existante_du_meme_jour():
+    """AC3 (AD-9) : relancer pour la même date écrase, jamais un second fichier."""
+    client = _FakeClient(
+        get_response=_FakeResponse(200, {"sha": "def456"}),
+        put_response=_FakeResponse(200),
+    )
+
+    ok = publish.publier_archive("# Digest mis à jour\n", date(2026, 8, 28), client=client)
+
+    assert ok is True
+    _, corps = client.put_calls[0]
+    assert corps["sha"] == "def456"
+
+
+def test_publier_archive_sans_jeton_resolu_ne_leve_pas(monkeypatch):
+    monkeypatch.setattr(publish, "_jeton", lambda: None)
+
+    assert publish.publier_archive("# Digest\n", date(2026, 8, 28)) is False
+
+
+def test_publier_archive_echec_reseau_ne_leve_pas():
+    client = _FakeClient(get_leve=httpx.ConnectError("réseau indisponible"))
+
+    assert publish.publier_archive("# Digest\n", date(2026, 8, 28), client=client) is False
+
+
+def test_publier_archive_reponse_en_erreur_ne_leve_pas():
+    client = _FakeClient(get_response=_FakeResponse(404), put_response=_FakeResponse(500))
+
+    assert publish.publier_archive("# Digest\n", date(2026, 8, 28), client=client) is False
+
+
+def test_echec_de_page_et_echec_d_archive_produisent_des_messages_distincts(caplog):
+    """AC8 : sans ça, Abdoulaye ne saurait pas laquelle des deux publications
+    a échoué une nuit donnée."""
+    client_page = _FakeClient(get_response=_FakeResponse(500))
+    client_archive = _FakeClient(get_response=_FakeResponse(500))
+
+    with caplog.at_level("WARNING"):
+        publish.publier("<html></html>", client=client_page)
+        publish.publier_archive("# Digest\n", date(2026, 8, 28), client=client_archive)
+
+    messages = [r.message for r in caplog.records]
+    messages_page = [m for m in messages if "page" in m.lower()]
+    messages_archive = [m for m in messages if "archive" in m.lower()]
+    assert messages_page, "aucun message ne mentionne la page"
+    assert messages_archive, "aucun message ne mentionne l'archive"
+    assert messages_page != messages_archive
+
+
+def test_echec_de_page_et_echec_d_archive_ont_chacun_leur_propre_trace_complete(caplog):
+    """Trouvé en revue : le drapeau « trace complète au premier échec »
+    était un booléen unique partagé entre page et archive — si les deux
+    échouaient dans le même run, seule la première des deux obtenait sa
+    trace complète (`exc_info=True`), l'autre n'ayant plus qu'un message
+    sans contexte de diagnostic. Chacune des deux catégories doit obtenir
+    sa propre trace complète au premier échec, indépendamment de l'ordre."""
+    client_page = _FakeClient(get_response=_FakeResponse(500))
+    client_archive = _FakeClient(get_response=_FakeResponse(500))
+
+    with caplog.at_level("WARNING"):
+        publish.publier("<html></html>", client=client_page)
+        publish.publier_archive("# Digest\n", date(2026, 8, 28), client=client_archive)
+
+    # `exc_info` sur l'enregistrement de log confirme qu'une trace complète
+    # a été demandée pour cet appel (`logger.warning(msg, exc_info=True)`).
+    records_avec_trace = [r for r in caplog.records if r.exc_info is not None]
+    assert len(records_avec_trace) == 2

@@ -5,6 +5,8 @@ import textwrap
 from pathlib import Path
 from types import SimpleNamespace
 
+import httpx
+
 from veille import pipeline
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
@@ -54,7 +56,8 @@ class _FakeResponse:
         return self._payload
 
     def raise_for_status(self):
-        pass
+        if self.status_code >= 400:
+            raise httpx.HTTPStatusError("erreur HTTP", request=None, response=self)
 
 
 class _ClientPublicationSimule:
@@ -76,7 +79,10 @@ class _ClientPublicationSimule:
         self.closed = True
 
 
-def test_executer_publie_un_html_contenant_les_entrees_du_socle(tmp_path):
+def test_executer_publie_la_page_et_l_archive_datee(tmp_path):
+    """Story 1.9 : deux publications par run — la page (index.html) et
+    l'archive du jour (site/archive/YYYY-MM-DD.md), à partir du même
+    horodatage de génération."""
     sources_yaml = _sources_yaml(tmp_path)
     client_llm = _ClientLLMSimule()
     client_publication = _ClientPublicationSimule()
@@ -88,13 +94,38 @@ def test_executer_publie_un_html_contenant_les_entrees_du_socle(tmp_path):
     )
 
     assert reussite is True
-    assert len(client_publication.put_calls) == 1
-    _, corps = client_publication.put_calls[0]
-    import base64
+    assert len(client_publication.put_calls) == 2
 
-    html = base64.b64decode(corps["content"]).decode("utf-8")
-    assert "Accroche simulée." in html
-    assert "Apprendre" in html
+    import base64
+    import re
+
+    corps_par_chemin = {url: corps for url, corps in client_publication.put_calls}
+    chemin_page = next((c for c in corps_par_chemin if c.endswith("/contents/index.html")), None)
+    chemin_archive = next(
+        (c for c in corps_par_chemin if re.search(r"/contents/site/archive/\d{4}-\d{2}-\d{2}\.md$", c)),
+        None,
+    )
+    assert chemin_page is not None
+    assert chemin_archive is not None
+
+    # Corrélation contenu ↔ chemin (trouvé en revue) : une régression qui
+    # inverserait les deux corps (HTML publié comme archive, Markdown publié
+    # comme page) passerait inaperçue si on se contentait de chercher les
+    # mêmes sous-chaînes dans les deux corps indistinctement.
+    html_publie = base64.b64decode(corps_par_chemin[chemin_page]["content"]).decode("utf-8")
+    markdown_publie = base64.b64decode(corps_par_chemin[chemin_archive]["content"]).decode("utf-8")
+
+    assert html_publie.lstrip().startswith("<!doctype html>")
+    assert "<style>" in html_publie
+    assert not markdown_publie.lstrip().startswith("<!doctype html>")
+    assert markdown_publie.lstrip().startswith("# Veille tech")
+
+    for contenu in (html_publie, markdown_publie):
+        # Pas de point final dans l'assertion : l'archive Markdown échappe
+        # la ponctuation (CommonMark, `_echapper_markdown`), sans effet une
+        # fois rendue — ce n'est pas ce que ce test vérifie.
+        assert "Accroche simulée" in contenu
+        assert "Apprendre" in contenu
 
 
 def test_executer_ne_publie_pas_avec_un_client_ferme_par_erreur(tmp_path):
@@ -111,6 +142,32 @@ def test_executer_ne_publie_pas_avec_un_client_ferme_par_erreur(tmp_path):
     )
 
     assert client_publication.closed is False
+
+
+def test_executer_publie_quand_meme_la_page_si_rendre_markdown_leve(tmp_path, monkeypatch):
+    """Trouvé en revue : la docstring affirme que la page et l'archive sont
+    « toujours tentées, même si l'une échoue » — mais ça ne tenait que pour
+    des échecs côté publication. Si `rendre_markdown()` lève *après* que
+    `rendre()` a réussi, la page déjà rendue avec succès ne doit pas être
+    perdue faute d'avoir été publiée avant l'échec de l'archive."""
+    sources_yaml = _sources_yaml(tmp_path)
+    client_publication = _ClientPublicationSimule()
+
+    def _rendre_markdown_qui_leve(*args, **kwargs):
+        raise RuntimeError("template markdown cassé")
+
+    monkeypatch.setattr(pipeline, "rendre_markdown", _rendre_markdown_qui_leve)
+
+    reussite = pipeline.executer(
+        sources_path=sources_yaml,
+        llm_client=_ClientLLMSimule(),
+        publish_client=client_publication,
+    )
+
+    assert reussite is False  # l'archive n'a jamais pu être publiée
+    # Mais la page, elle, a bien été tentée et publiée avant l'échec.
+    assert len(client_publication.put_calls) == 1
+    assert client_publication.put_calls[0][0].endswith("/contents/index.html")
 
 
 def test_executer_ne_leve_pas_si_rendre_leve(tmp_path, monkeypatch):
@@ -132,6 +189,41 @@ def test_executer_ne_leve_pas_si_rendre_leve(tmp_path, monkeypatch):
     )
 
     assert reussite is False
+
+
+class _ClientPublicationPartielle:
+    """La page se publie, l'archive échoue — vérifie que les deux
+    publications sont tentées indépendamment (AC7/8, Story 1.9)."""
+
+    def __init__(self):
+        self.put_calls = []
+        self.closed = False
+
+    def get(self, url):
+        return _FakeResponse(404)
+
+    def put(self, url, json=None):
+        self.put_calls.append((url, json))
+        if "archive" in url:
+            return _FakeResponse(500)
+        return _FakeResponse(201)
+
+    def close(self):
+        self.closed = True
+
+
+def test_executer_tente_les_deux_publications_meme_si_l_une_echoue(tmp_path):
+    sources_yaml = _sources_yaml(tmp_path)
+    client_publication = _ClientPublicationPartielle()
+
+    reussite = pipeline.executer(
+        sources_path=sources_yaml,
+        llm_client=_ClientLLMSimule(),
+        publish_client=client_publication,
+    )
+
+    assert reussite is False  # l'archive a échoué
+    assert len(client_publication.put_calls) == 2  # les deux ont bien été tentées
 
 
 def test_executer_degrade_proprement_sans_client_llm_ni_jeton_de_publication(

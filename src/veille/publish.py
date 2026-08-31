@@ -1,6 +1,7 @@
-"""Publication du digest (AD-8, FR-9).
+"""Publication du digest (AD-8, FR-9) et de son archive datée (FR-10).
 
-Écrit/actualise `index.html` dans un **second dépôt GitHub, public, dédié
+Écrit/actualise `index.html` (page) et `site/archive/YYYY-MM-DD.md`
+(archive, Story 1.9) dans un **second dépôt GitHub, public, dédié
 uniquement à la sortie publiée** — `Agent_Veille_Tech` (le code, les
 stories) reste privé. Décision actée avec Abdoulaye le 2026-08-28 : la
 Structural Seed de l'architecture anticipait déjà cette variante (« `site/`
@@ -16,6 +17,7 @@ import base64
 import logging
 import os
 import subprocess
+from datetime import date
 
 import httpx
 from dotenv import load_dotenv
@@ -27,12 +29,17 @@ logger = logging.getLogger(__name__)
 # cible de publication. Paramètre que seul Abdoulaye modifierait, et rarement.
 PUBLISH_REPO = "petitlaye03/agent-veille-tech-digest"
 
-CHEMIN_FICHIER = "index.html"
+# Renommé depuis `CHEMIN_FICHIER` (Story 1.9) : il existe désormais un second
+# chemin, celui de l'archive datée (voir `publier_archive`).
+CHEMIN_PAGE = "index.html"
 API_BASE = "https://api.github.com"
 
 _env_charge = False
 _avertissement_jeton_absent_emis = False
-_avertissement_echec_publication_emis = False
+# Catégories (`"page"`, `"archive"`) ayant déjà reçu leur trace complète au
+# premier échec — un `set`, pas un booléen unique, depuis la Story 1.9 (voir
+# `_avertir_echec_publication`).
+_categories_echec_avec_trace_emise: set[str] = set()
 
 
 def _jeton_depuis_env() -> str | None:
@@ -99,7 +106,7 @@ def _client() -> httpx.Client | None:
     )
 
 
-def _sha_existant(client: httpx.Client) -> str | None:
+def _sha_existant(client: httpx.Client, chemin: str) -> str | None:
     """Sha du fichier existant dans le dépôt de sortie, ou `None` si absent
     (première publication — traitée comme une création, pas un échec).
 
@@ -109,17 +116,29 @@ def _sha_existant(client: httpx.Client) -> str | None:
     suivant tenter une création sans `sha` sur un fichier qui existe peut-
     être réellement, masquant la cause exacte derrière un rejet générique
     de l'API. `raise_for_status()` la fait remonter à l'appelant
-    (`publier`), qui l'isole comme toute autre panne.
+    (`_publier`), qui l'isole comme toute autre panne.
+
+    `chemin` (Story 1.9) : cette fonction sert aussi bien la page
+    (`CHEMIN_PAGE`) que l'archive datée (`site/archive/YYYY-MM-DD.md`) —
+    même mécanisme d'upsert par `sha` pour les deux (AD-9).
     """
-    reponse = client.get(f"/repos/{PUBLISH_REPO}/contents/{CHEMIN_FICHIER}")
+    reponse = client.get(f"/repos/{PUBLISH_REPO}/contents/{chemin}")
     if reponse.status_code == 404:
         return None
     reponse.raise_for_status()
     return reponse.json().get("sha")
 
 
-def publier(html: str, client: httpx.Client | None = None) -> bool:
-    """Publie `html` comme `index.html` du dépôt de sortie (AC10).
+def _publier(chemin: str, contenu: str, client: httpx.Client | None, quoi: str, categorie: str) -> bool:
+    """Cœur partagé : écrit/actualise un fichier via l'API Contents (Story 1.9).
+
+    Extrait de l'ancien corps unique de `publier()` pour être réutilisé par
+    `publier()` (page) et `publier_archive()` (archive datée) sans dupliquer
+    la résolution/fermeture du client ni l'isolation de panne. `quoi`
+    (« de la page », « de l'archive du ... ») distingue les deux dans les
+    journaux (AC8, Story 1.9) ; `categorie` (`"page"`/`"archive"`, trouvé
+    en revue) sert uniquement à dédupliquer la trace complète du premier
+    échec par catégorie — voir `_avertir_echec_publication`.
 
     Isolation totale (réseau, 401, 404, timeout) : ne lève jamais, retourne
     `False` sur tout échec — y compris l'absence de jeton résolu. Un client
@@ -132,34 +151,64 @@ def publier(html: str, client: httpx.Client | None = None) -> bool:
         return False
 
     try:
-        sha = _sha_existant(resolu)
+        sha = _sha_existant(resolu, chemin)
         corps = {
-            "message": "Mise à jour du digest",
-            "content": base64.b64encode(html.encode("utf-8")).decode("ascii"),
+            "message": f"Mise à jour {quoi}",
+            "content": base64.b64encode(contenu.encode("utf-8")).decode("ascii"),
         }
         if sha:
             corps["sha"] = sha
 
-        reponse = resolu.put(f"/repos/{PUBLISH_REPO}/contents/{CHEMIN_FICHIER}", json=corps)
+        reponse = resolu.put(f"/repos/{PUBLISH_REPO}/contents/{chemin}", json=corps)
         reponse.raise_for_status()
         return True
     except httpx.HTTPError:
-        _avertir_echec_publication()
+        _avertir_echec_publication(quoi, categorie)
         return False
     except Exception:  # noqa: BLE001 — isolation totale, même hors httpx.HTTPError
-        _avertir_echec_publication()
+        _avertir_echec_publication(quoi, categorie)
         return False
     finally:
         if not fourni:
             resolu.close()
 
 
-def _avertir_echec_publication() -> None:
-    """Trace complète pour le premier échec du run, message court ensuite —
-    même patron que `enrich/llm.py::_avertir_echec_api`."""
-    global _avertissement_echec_publication_emis
-    if not _avertissement_echec_publication_emis:
-        logger.warning("Échec de la publication du digest.", exc_info=True)
-        _avertissement_echec_publication_emis = True
+def publier(html: str, client: httpx.Client | None = None) -> bool:
+    """Publie `html` comme `index.html` du dépôt de sortie (AC10, Story 1.8)."""
+    return _publier(CHEMIN_PAGE, html, client, "de la page", categorie="page")
+
+
+def publier_archive(markdown: str, date_digest: date, client: httpx.Client | None = None) -> bool:
+    """Publie l'archive Markdown datée du digest (FR-10, Story 1.9).
+
+    Chemin `site/archive/YYYY-MM-DD.md` (Structural Seed) — relancer le
+    pipeline pour la même date écrase l'archive existante au lieu d'en
+    créer une seconde (AC3, AD-9) : même mécanisme d'upsert par `sha` que
+    `publier()`, hérité de `_publier()` sans code supplémentaire.
+    """
+    chemin = f"site/archive/{date_digest.isoformat()}.md"
+    return _publier(
+        chemin, markdown, client, f"de l'archive du {date_digest.isoformat()}", categorie="archive"
+    )
+
+
+def _avertir_echec_publication(quoi: str, categorie: str) -> None:
+    """Trace complète pour le premier échec du run **par catégorie**, message
+    court ensuite — même patron que `enrich/llm.py::_avertir_echec_api`.
+
+    `categorie` (`"page"`/`"archive"`, trouvé en revue) : le drapeau
+    « trace complète au premier échec » était auparavant un booléen unique
+    partagé entre la page et l'archive — si les deux échouaient dans le
+    même run, seule la première des deux obtenait sa trace complète,
+    l'autre n'ayant plus qu'un message sans contexte de diagnostic malgré
+    un échec tout aussi nouveau. Une catégorie par type de publication
+    corrige ça sans réintroduire le risque écarté en Story 1.8 (un
+    horodatage dans la clé de dédoublonnage empêcherait toute
+    déduplication réelle, l'archive changeant de nom chaque jour)."""
+    global _categories_echec_avec_trace_emise
+    message = f"Échec de la publication {quoi}."
+    if categorie not in _categories_echec_avec_trace_emise:
+        logger.warning(message, exc_info=True)
+        _categories_echec_avec_trace_emise.add(categorie)
     else:
-        logger.warning("Échec de la publication du digest.")
+        logger.warning(message)

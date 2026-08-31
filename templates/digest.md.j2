@@ -1,0 +1,23 @@
+# Veille tech — {{ date_generation.strftime("%d/%m/%Y") }}
+
+_Généré le {{ date_generation.strftime("%d/%m/%Y à %H:%M") }} (heure de Dakar)_
+{% if digest_vide %}
+Rien à signaler ce jour-là — retour le lendemain.
+{%- else %}
+{% for registre, libelle, entrees_section in sections %}
+{%- if entrees_section %}
+
+## {{ libelle | markdown_safe }}
+{% for entree in entrees_section %}
+{%- set titre_affiche = (entree.item.titre if entree.item.titre else entree.accroche) | markdown_safe -%}
+{%- set lien = url_surs(entree.item.url) -%}
+- {% if entree.recommandee %}★ **À NE PAS MANQUER** — {% endif -%}
+{%- if lien -%}
+[{{ titre_affiche }}](<{{ lien }}>)
+{%- else -%}
+{{ titre_affiche }}
+{%- endif %} — {{ entree.accroche | markdown_safe }}
+{% endfor %}
+{%- endif %}
+{%- endfor %}
+{%- endif %}

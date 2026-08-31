@@ -1,10 +1,11 @@
 """Orchestrateur du pipeline complet (AD-1, Story 1.8).
 
 Point d'entrée unique : collecte → enrichissement (accroches + recommandation,
-FR-7/8) → rendu (FR-9) → publication (AD-8). Résout la partie de la tension
-AD-1 suivie depuis la Story 1.4 qui a un AC réel ici — le chaînage interne
-de `collecter()` (collecte → seuil de signal → dédoublonnage → scoring →
-quotas) n'est volontairement pas défait, voir les Dev Notes de la story
+FR-7/8) → rendu (FR-9, + archive Markdown FR-10 depuis la Story 1.9) →
+publication (AD-8). Résout la partie de la tension AD-1 suivie depuis la
+Story 1.4 qui a un AC réel ici — le chaînage interne de `collecter()`
+(collecte → seuil de signal → dédoublonnage → scoring → quotas) n'est
+volontairement pas défait, voir les Dev Notes de la story
 1-8-publication-page.md pour la justification.
 """
 
@@ -18,8 +19,8 @@ import httpx
 from veille import collect
 from veille.enrich.llm import enrichir, marquer_recommandation
 from veille.filter import charger_ponderations
-from veille.publish import publier
-from veille.render import rendre
+from veille.publish import publier, publier_archive
+from veille.render import rendre, rendre_markdown
 
 logger = logging.getLogger(__name__)
 
@@ -49,13 +50,29 @@ def executer(
     romprait l'invariant AD-7 vérifié mécaniquement par `grep` (un seul
     point d'import du SDK, `enrich/llm.py`) — trouvé en revue.
 
-    Ne lève jamais : `collecter`, `enrichir`, `marquer_recommandation` et
-    `publier` dégradent déjà proprement de leur côté, mais `rendre()` n'a
-    pas cette garantie qui lui soit propre (aucun appel réseau à isoler,
-    mais un template manquant ou corrompu lèverait — trouvé en revue).
-    L'intégralité du corps de cette fonction est donc enveloppée d'un filet
-    de sécurité de dernier recours. Retourne `True` si la publication a
-    réussi, `False` sinon — jamais d'exception qui remonterait jusqu'à
+    Deux publications par run depuis la Story 1.9 : la page (`rendre` +
+    `publier`) et l'archive Markdown du jour (`rendre_markdown` +
+    `publier_archive`), à partir du **même** relevé d'horloge
+    (`maintenant`) — une seule source de vérité temporelle par run, pas
+    deux horodatages potentiellement décalés. Le run n'est un succès que
+    si les deux le sont (`page_ok and archive_ok`).
+
+    La page est **rendue et publiée avant** que l'archive soit même
+    rendue (trouvé en revue) : sans cet ordre, un `rendre_markdown()` qui
+    lève (aucune garantie de non-levée qui lui soit propre, voir plus bas)
+    ferait perdre la page — alors qu'elle avait déjà été produite avec
+    succès et n'attendait que d'être publiée. Une panne isolée sur l'une
+    des deux étapes ne doit jamais faire perdre l'autre alors qu'elle
+    aurait pu réussir.
+
+    Ne lève jamais : `collecter`, `enrichir`, `marquer_recommandation`,
+    `publier` et `publier_archive` dégradent déjà proprement de leur côté,
+    mais `rendre()`/`rendre_markdown()` n'ont pas cette garantie qui leur
+    soit propre (aucun appel réseau à isoler, mais un template manquant ou
+    corrompu lèverait — trouvé en revue). L'intégralité du corps de cette
+    fonction est donc enveloppée d'un filet de sécurité de dernier recours.
+    Retourne `True` si la page **et** l'archive ont été publiées avec
+    succès, `False` sinon — jamais d'exception qui remonterait jusqu'à
     l'appelant.
     """
     try:
@@ -69,8 +86,15 @@ def executer(
         ponderations = charger_ponderations(scoring_path_resolu)
         entrees = marquer_recommandation(entrees, resultat_collecte.resultats_repartis, ponderations)
 
-        html = rendre(entrees, datetime.now(timezone.utc))
-        return publier(html, client=publish_client)
+        maintenant = datetime.now(timezone.utc)
+
+        html = rendre(entrees, maintenant)
+        page_ok = publier(html, client=publish_client)
+
+        markdown = rendre_markdown(entrees, maintenant)
+        archive_ok = publier_archive(markdown, maintenant.date(), client=publish_client)
+
+        return page_ok and archive_ok
     except Exception:  # noqa: BLE001 — filet de sécurité de dernier recours (trouvé en revue)
         logger.exception("Échec inattendu du pipeline — nuit perdue, mais le run ne plante pas.")
         return False
