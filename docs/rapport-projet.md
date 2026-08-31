@@ -8,9 +8,9 @@
 > code, pas un instantané figé. La §10 (Référence technique) en particulier
 > doit être corrigée dès qu'un fichier qu'elle décrit change de comportement.
 >
-> **Dernière mise à jour :** 2026-08-28, fin de la Story 1.8 (dev + revue).
-> **Story courante :** aucune (1.8 terminée, `done`).
-> **Prochaine story :** 1.9 — Archiver chaque digest en Markdown.
+> **Dernière mise à jour :** 2026-08-31, fin de la Story 1.9 (dev + revue).
+> **Story courante :** aucune (1.9 terminée, `done` — **Epic 1 entièrement terminé**).
+> **Prochaine étape :** choisir le prochain Epic à attaquer (2, 3 ou 4 — voir §11).
 
 ---
 
@@ -46,7 +46,7 @@ et se **branche avant** le dédoublonnage pour le seuil de signal (corrigé en r
 collecte → seuil de signal → dédoublonnage → scoring par profil → quotas par registre → (accroches, rendu, publication)
 ```
 
-Depuis la Story 1.6, le module d'accroche (`enrich/llm.py`, AD-7) existe ; depuis la Story 1.7, ce même module porte aussi la détermination de l'entrée recommandée du jour (FR-8, déterministe, sans appel API). **Depuis la Story 1.8, les deux sont enfin branchés dans un run réel** : `pipeline.py` (nouveau, AD-1) enchaîne `collecter()` → `enrichir()` → `marquer_recommandation()` → `rendre()` (nouveau, `render.py`) → `publier()` (nouveau, `publish.py`), un seul point d'entrée (`uv run python -m veille.pipeline`). Le pipeline complet, de la collecte à la publication, existe donc pour la première fois — même si la publication réelle contre GitHub reste non validée faute du second dépôt de sortie (voir §8, §9).
+Depuis la Story 1.6, le module d'accroche (`enrich/llm.py`, AD-7) existe ; depuis la Story 1.7, ce même module porte aussi la détermination de l'entrée recommandée du jour (FR-8, déterministe, sans appel API). Depuis la Story 1.8, les deux sont branchés dans un run réel : `pipeline.py` (AD-1) enchaîne `collecter()` → `enrichir()` → `marquer_recommandation()` → `rendre()`/`publier()` (page HTML), un seul point d'entrée (`uv run python -m veille.pipeline`). **Depuis la Story 1.9**, ce même point d'entrée publie aussi l'archive Markdown datée du jour (`rendre_markdown()`/`publier_archive()`, FR-10) — page et archive à partir du même relevé d'horloge, chacune tentée indépendamment de l'autre. Le pipeline complet, de la collecte à la double publication (page + archive), existe donc pour la première fois — même si la publication réelle contre GitHub reste non validée faute du second dépôt de sortie (voir §8, §9).
 
 ### Décisions structurantes (AD-1 à AD-11)
 
@@ -61,8 +61,8 @@ Document de référence : [ARCHITECTURE-SPINE.md](../_bmad-output/planning-artif
 | AD-5 | SQLite, propriétaire unique de l'état | ⏳ Pas encore construit — prévu quand une story en aura réellement besoin (dédup cross-nuit Story 3.4, santé des sources Epic 4) |
 | AD-6 | Isolation des pannes par source, jamais d'exception qui interrompt le run | ✅ Éprouvé en conditions réelles (Story 1.2) et durci à plusieurs reprises en revue |
 | AD-7 | Frontière LLM unique (`enrich.llm`, Claude Haiku) | ✅ Construit (Story 1.6, FR-7 : accroches) et étendu (Story 1.7, FR-8 : recommandation) — `enrich/llm.py`, seul point d'appel API vérifié mécaniquement (`grep`). **Branché dans un run réel depuis la Story 1.8** (`pipeline.py`), mais toujours pas validé contre l'API véritable (aucune clé fournie) — voir §8 |
-| AD-8 | Publication par commit git vers GitHub Pages | 🟡 Construit (Story 1.8) — `publish.py`, via l'API Contents GitHub vers un **second dépôt public dédié** (variante explicitement anticipée par le Structural Seed, le dépôt de code reste privé). Testé et validé en dégradation (sans jeton), **pas encore validé contre l'API réelle** : le dépôt de sortie n'a pas encore été créé (action réelle sous le compte d'Abdoulaye, différée) — voir §8, §9 |
-| AD-9 | Idempotence du job nocturne (upsert par date) | ⏳ Epic 3 |
+| AD-8 | Publication par commit git vers GitHub Pages | 🟡 Construit (Story 1.8 : page HTML ; Story 1.9 : archive Markdown datée) — `publish.py`, via l'API Contents GitHub vers un **second dépôt public dédié** (variante explicitement anticipée par le Structural Seed, le dépôt de code reste privé). Page et archive partagent le même dépôt, comme l'exige la règle. Testé et validé en dégradation (sans jeton), **pas encore validé contre l'API réelle** : le dépôt de sortie n'a pas encore été créé (action réelle sous le compte d'Abdoulaye, différée) — voir §8, §9 |
+| AD-9 | Idempotence du job nocturne (upsert par date) | 🟡 Le mécanisme d'upsert existe et est exercé (Story 1.9) — `publier_archive` écrase l'archive existante d'une même date via son `sha` plutôt que d'en créer une seconde. L'ordonnancement nocturne lui-même (déclencheur, reprise après échec) reste Epic 3 |
 | AD-10 | Aucune source en violation de CGU ; `robots.txt` vérifié avant scraping | ✅ Vérification runtime implémentée (Story 1.2, seconde passe de revue). Secrets en `.env` (Story 1.6) : vérifié gitignoré, aucune fuite dans le dépôt |
 | AD-11 | « Déjà vu » validé seulement après publication réussie | ⏳ Epic 3 |
 
@@ -83,7 +83,7 @@ Projet mené en méthode **BMAD** : brief → PRD → architecture → epics/sto
 
 | Epic | Contenu | État |
 |---|---|---|
-| **Epic 1** | Un premier digest, réel, bout en bout (3-5 sources) | 🟡 En cours — Stories 1.1-1.8 `done`, 1.9 à faire |
+| **Epic 1** | Un premier digest, réel, bout en bout (3-5 sources) | ✅ **Terminé** — Stories 1.1-1.9 toutes `done` |
 | **Epic 2** | Socle élargi (15-20 sources) et robustesse aux pannes | ⏳ Pas commencé |
 | **Epic 3** | Génération nocturne automatique | ⏳ Pas commencé |
 | **Epic 4** | Santé des sources et découverte de nouvelles sources | ⏳ Pas commencé |
@@ -99,12 +99,12 @@ Projet mené en méthode **BMAD** : brief → PRD → architecture → epics/sto
 | 1.5 | Quotas par section (Apprendre/Ce qui bouge/Pour le métier) | ✅ `done` | 213 → 221 |
 | 1.6 | Accroches en français (frontière LLM) | ✅ `done` | 235 → 242 |
 | 1.7 | Signaler les entrées à ne pas manquer | ✅ `done` | 260 → 263 |
-| 1.8 | Publier une page à URL fixe (rendu + publication + `pipeline.py`) | ✅ `done` | 291 → **299** |
-| 1.9 | Archiver chaque digest en Markdown | ⏳ à faire — **prochaine** | — |
+| 1.8 | Publier une page à URL fixe (rendu + publication + `pipeline.py`) | ✅ `done` | 291 → 299 |
+| 1.9 | Archiver chaque digest en Markdown | ✅ `done` | 314 → **323** |
 
 > ⚠️ **Note d'hygiène à traiter** : les fichiers de story 1.2 et 1.3 portent encore `Status: review` dans leur frontmatter, alors que leurs Change Log respectifs démontrent une revue menée et conclue (correctifs appliqués, suites vertes). Seules les Stories 1.4 et 1.5 ont été explicitement repassées à `done`. À corriger mécaniquement (`review` → `done`) la prochaine fois qu'on touche à ces fichiers.
 
-**Total tests actuel : 299, tous verts** (`uv run pytest`).
+**Total tests actuel : 323, tous verts** (`uv run pytest`).
 
 ## 6. Ce qui est livré, story par story
 
@@ -192,6 +192,20 @@ Deux dettes techniques fermées au passage, toutes deux explicitement fléchées
 
 8 correctifs, 0 report, 5 rejets — dont le bandeau d'échec nocturne (explicitement hors périmètre, un état de run persistant n'existe pas encore) et la portée non restreinte du jeton `gh auth token` (compromis déjà assumé dans les Dev Notes). 291 → 299 tests. Détail complet : [1-8-publication-page.md](../_bmad-output/implementation-artifacts/1-8-publication-page.md).
 
+### 6.9 — Story 1.9 : archiver chaque digest en Markdown (FR-10) — Epic 1 terminé
+
+Dernière story de l'Epic 1. `render.rendre_markdown()` + `templates/digest.md.j2` produisent l'archive Markdown du jour, en réutilisant le regroupement par registre de la page HTML (`_grouper_par_registre`, extrait de `rendre()` en refactor pur) pour que les deux sorties ne divergent jamais. `publish.publier_archive()` publie à un chemin daté (`site/archive/YYYY-MM-DD.md`), avec le même mécanisme d'upsert par `sha` que la page (AD-9 : relancer pour la même date écrase, jamais un doublon). `pipeline.py` publie désormais la page et l'archive à partir du même relevé d'horloge par run.
+
+Deux refactors purs vérifiés avant tout ajout (`_grouper_par_registre`, et `_publier`/`_sha_existant(chemin)` extraits de `publish.publier()`) : suite existante rejouée verte sans modification avant d'écrire le moindre code neuf.
+
+**Revue de code (Sonnet 5, même modèle que l'implémentation)** — les 3 couches ont convergé sur un couple de constats dans des directions opposées, résolus par le même correctif. D'un côté, l'ensemble de caractères échappés en Markdown (`_echapper_markdown`) omettait `<` : un titre `<img src=x onerror=...>` de source externe restait une vraie balise HTML brute dans l'archive, contournant l'AC de sûreté malgré l'échappement des autres caractères. De l'autre, ce même ensemble échappait aussi `#`/`-`/`+`/`.` — syntaxiquement actifs seulement en tout début de ligne, jamais atteignable ici puisque le texte est toujours inséré au milieu d'une puce déjà ouverte — ce qui cassait l'AC dédié à la recherche par texte (« cherchable sur l'ensemble de l'historique ») pour un cas aussi banal qu'un nom de modèle versionné (`GPT-5.2`). Corrigé dans les deux sens à la fois : `<` ajouté, les quatre autres retirés, et les sauts de ligne incorporés neutralisés (nécessaire pour que ce retrait reste sûr — sans ça, un saut de ligne aurait pu replacer un `-`/`#` en tout début d'une nouvelle ligne, où il redevient actif).
+
+Correctif de robustesse le plus significatif : `pipeline.executer()` affirmait que la page et l'archive sont « toujours tentées, même si l'une échoue » — vrai seulement pour un échec côté publication. Si `rendre_markdown()` levait après que `rendre()` a réussi, la page déjà produite avec succès était perdue faute d'avoir été publiée avant l'échec de l'archive. Corrigé en publiant la page immédiatement après son rendu, avant même de tenter de rendre l'archive — vérifié par mutation manuelle (contenus HTML/Markdown inversés entre les deux publications, un test durci de corrélation contenu↔chemin l'attrape).
+
+4 autres correctifs : trace complète par catégorie (page/archive) au lieu d'un booléen global partagé (sinon le second échec du run perdait sa trace de diagnostic) ; `_url_surs` rejette aussi les chevrons littéraux (cassaient l'enveloppe `<...>` du lien Markdown) ; libellé de section échappé par cohérence défensive ; couverture de test étendue pour la parité HTML/Markdown.
+
+9 correctifs, 0 report, 4 rejets — dont le doublon de l'avertissement « registre inconnu » (un correctif propre exigerait un changement disproportionné ou introduirait un bug pire) et le risque `.nojekyll` qui s'étend maintenant à l'archive (déjà suivi comme prérequis d'infrastructure, pas du code). 314 → 323 tests. Détail complet : [1-9-archive-markdown.md](../_bmad-output/implementation-artifacts/1-9-archive-markdown.md).
+
 ## 7. Journal des décisions structurantes (cumulatif)
 
 Ce journal ne répète pas le détail des stories (§6) ; il ne garde que ce qui **contraint les stories suivantes**.
@@ -221,6 +235,10 @@ Ce journal ne répète pas le détail des stories (§6) ; il ne garde que ce qui
 23. **Un indicateur de repli (« rien à afficher »/« digest vide »…) doit se calculer sur ce qui a été réellement produit, pas sur la non-vacuité de l'entrée** — `render.py` calculait `digest_vide` à partir de la liste d'`Entree` reçue plutôt que des sections effectivement peuplées après regroupement ; une entrée valide mais mal routée (registre inconnu) disparaissait alors sans déclencher le message honnête censé couvrir précisément ce cas (Story 1.8, constat convergent des 3 couches de revue).
 24. **Un dépôt de sortie séparé, public, dédié uniquement à un artefact publié, est une variante d'architecture légitime** quand l'hébergement (ici GitHub Pages) ne fonctionne pas sur le dépôt de code resté privé pour de bonnes raisons — à condition que l'architecture l'ait anticipé (ce qu'`ARCHITECTURE-SPINE.md` faisait déjà) ou, sinon, que ce soit acté explicitement comme un amendement (Story 1.8).
 25. **Réutiliser une session d'outil déjà authentifiée (`gh auth token`) en repli avant d'imposer un nouveau secret dédié** — réduit la friction de mise en route sans bloquer un futur passage à un jeton restreint (`GITHUB_TOKEN`, déjà prévu en option) quand le contexte d'exécution changera (ex. GitHub Actions, Epic 3) (Story 1.8).
+26. **Échapper un texte de sortie n'est pas binaire : le bon ensemble de caractères dépend de la position syntaxique, pas seulement du format cible** — `#`/`-`/`+`/`.` ne sont actifs qu'en tout début de ligne en Markdown ; les échapper partout, y compris en milieu de texte où ils sont inertes, protège de rien de plus mais casse la lisibilité/recherche du texte produit. Un échappement mal calibré peut être à la fois trop permissif (un `<` oublié) et trop restrictif (une ponctuation commune neutralisée sans raison) **au même endroit** — les deux doivent être vérifiés ensemble, pas seulement « est-ce que c'est bien échappé » (Story 1.9, constat convergent des 3 couches de revue dans les deux sens à la fois).
+27. **Neutraliser les sauts de ligne incorporés avant d'alléger un ensemble de caractères échappés en fonction de leur position** — retirer l'échappement de caractères seulement actifs en début de ligne (décision #26) n'est sûr que si le texte inséré ne peut pas lui-même introduire une nouvelle ligne qui les y replacerait ; `Item.titre`/`Entree.accroche` n'ont aucune garantie de contenu mono-ligne (Story 1.9).
+28. **Publier le premier des deux artefacts indépendants dès qu'il est prêt, pas après avoir tenté de produire les deux** — `pipeline.executer()` rendait la page et l'archive avant de publier l'une ou l'autre ; un échec de rendu du second faisait perdre le premier, pourtant déjà réussi. Un filet de sécurité englobant ne compense pas un mauvais ordonnancement des effets de bord qu'il protège (Story 1.9).
+29. **Un drapeau « une fois par run » qui protège deux occurrences logiquement distinctes doit être scindé par catégorie, pas partagé** — le même réflexe qui a dédupliqué un avertissement (décision implicite depuis la Story 1.6) peut, mal appliqué, supprimer la trace de diagnostic d'un second échec réellement nouveau simplement parce qu'un premier a déjà eu lieu dans le même run (Story 1.9 : trace complète par catégorie page/archive, pas un booléen global).
 
 ## 8. Dette technique et travail reporté
 
@@ -228,15 +246,15 @@ Liste vivante complète : [deferred-work.md](../_bmad-output/implementation-arti
 
 **Epic 2 (socle élargi, robustesse)** — timeout réseau sur `feedparser`/`httpx`, distinction 404 vs flux malformé, retry/backoff sur 429/5xx, plafond de taille des réponses HTTP, mode d'extraction « carte » pour le scraping (titre/date en frères de l'ancre, pas en descendants — bloque l'ajout de la plupart des blogs WordPress), en-têtes/authentification pour les API JSON (bloque Kaggle, prévu au socle v1), `url_modele` limité à `{guid}`, **`config/sources.yaml` ne déclare aucune source en registre `pour_le_metier`** (la 3ᵉ section du digest sera structurellement vide tant que cette lacune n'est pas comblée — trouvé en revue de la Story 1.5).
 
-**Epic 3 (nocturne automatique)** — délai d'attente global sur `feedparser` ; ordonnancement (Planificateur de tâches, FR-11) ; un bandeau d'échec nocturne sur la page publiée suppose un état de run persistant que `store.py`/SQLite (AD-5) ne fournit pas encore — trouvé en revue de la Story 1.8, le pipeline peut aujourd'hui publier un « rien à signaler » aussi bien pour une nuit calme que pour une collecte réellement en panne, sans les distinguer ; le chaînage interne de `collecter()` (collecte+dédup+filtre+quotas en une seule fonction, tension AD-1 non entièrement résolue par la Story 1.8, voir §7#24) pourrait être éclaté à cette occasion si un besoin réel apparaît.
+**Epic 3 (nocturne automatique)** — délai d'attente global sur `feedparser` ; ordonnancement (Planificateur de tâches, FR-11) ; un bandeau d'échec nocturne sur la page publiée suppose un état de run persistant que `store.py`/SQLite (AD-5) ne fournit pas encore — trouvé en revue de la Story 1.8, le pipeline peut aujourd'hui publier un « rien à signaler » aussi bien pour une nuit calme que pour une collecte réellement en panne, sans les distinguer ; le chaînage interne de `collecter()` (collecte+dédup+filtre+quotas en une seule fonction, tension AD-1 non entièrement résolue par la Story 1.8, voir §7#24) pourrait être éclaté à cette occasion si un besoin réel apparaît ; `rendre()`/`rendre_markdown()` journalisent chacun indépendamment un éventuel « registre inconnu » via leur propre appel à `_grouper_par_registre` — un même run le journalise donc deux fois (trouvé en revue de la Story 1.9, non corrigé : un correctif propre exigerait de changer la signature publique des deux fonctions pour leur passer un regroupement déjà calculé, ou introduirait un drapeau persistant qui supprimerait à tort un avertissement réellement nouveau plus tard).
 
 **Epic 4 (santé des sources)** — distinction diagnostique fine des échecs, racine JSON vide non signalée, bornes de plausibilité sur les dates aberrantes.
 
 **Validation réelle contre l'API véritable (`enrich/llm.py`)** — langue de sortie, longueur réelle, coût réel mesuré via `usage.input_tokens`/`output_tokens` : différée faute de clé `ANTHROPIC_API_KEY` depuis la Story 1.6. `enrich/llm.py` est désormais branché dans un run réel (`pipeline.py`, Story 1.8), donc cette validation est maintenant la seule chose qui manque pour considérer FR-7/NFR1 pleinement éprouvés en conditions réelles.
 
-**Validation réelle de la publication (`publish.py`, Story 1.8)** — le second dépôt GitHub public dédié à la sortie (`petitlaye03/agent-veille-tech-digest` ou nom ajusté) n'a pas encore été créé, ni GitHub Pages activé dessus : action réelle sous le compte d'Abdoulaye, à confirmer explicitement avant de l'exécuter. `publish.py` est validé par tests (client HTTP simulé) et par exécution réelle en dégradation (sans jeton résolu), mais pas encore contre l'API GitHub véritable.
+**Validation réelle de la publication (`publish.py`, Stories 1.8/1.9)** — le second dépôt GitHub public dédié à la sortie (`petitlaye03/agent-veille-tech-digest` ou nom ajusté) n'a pas encore été créé, ni GitHub Pages activé dessus, ni le fichier `.nojekyll` qui devrait l'accompagner (trouvé en revue de la Story 1.8, concerne aussi bien `index.html` que l'archive Markdown de la Story 1.9 — Jekyll appliquerait son propre moteur de templates Liquid à l'un comme à l'autre) : action réelle sous le compte d'Abdoulaye, à confirmer explicitement avant de l'exécuter. `publish.py` (page **et** archive) est validé par tests (client HTTP simulé) et par exécution réelle en dégradation (sans jeton résolu), mais pas encore contre l'API GitHub véritable.
 
-**Non priorisé / précondition documentée, pas corrigée** — `rapport_quotas`/`rapport_classement` (`filter.py`) et, depuis la Story 1.7, `marquer_recommandation` (`enrich/llm.py`) sur-comptent en théorie si le même objet `Item` apparaît deux fois dans leur entrée (non atteignable via `collecter()`, `dedup.py` garantit l'unicité) ; `SourceConfig` non hashable ; `_resoudre_chemin` ne traverse pas les listes ; validation du `type`/champs requis par source au chargement ; formats de date US ambigus (`%m/%d/%Y`) ; garde de domaine sensible à la casse (scraping) ; `ARCHITECTURE-SPINE.md` toujours à `anthropic 0.119.0` alors que `1.2.0` est installé (aucun AC ne l'exige, dérive sans impact constaté) ; `scoring.yaml` relu deux fois par run (`collecter()` puis `pipeline.executer()`, faute d'exposer `Ponderations` sur `ResultatCollecte`) — coût négligible, non corrigé (trouvé en revue de la Story 1.8) ; le jeton issu de `gh auth token` (`publish.py`) n'est ni restreint ni validé en portée avant un usage non surveillé — compromis assumé, un `GITHUB_TOKEN` dédié reste disponible en option ; l'API Contents de GitHub a un plafond de charge utile par fichier (~1 Mo) non anticipé, prématuré à l'échelle actuelle du projet ; `_sha_existant`/`publier` n'ont pas de logique de nouvelle tentative si le `sha` change entre le `GET` et le `PUT` (écriture concurrente) — non atteignable aujourd'hui, système mono-opérateur, un seul run par nuit.
+**Non priorisé / précondition documentée, pas corrigée** — `rapport_quotas`/`rapport_classement` (`filter.py`) et, depuis la Story 1.7, `marquer_recommandation` (`enrich/llm.py`) sur-comptent en théorie si le même objet `Item` apparaît deux fois dans leur entrée (non atteignable via `collecter()`, `dedup.py` garantit l'unicité) ; `SourceConfig` non hashable ; `_resoudre_chemin` ne traverse pas les listes ; validation du `type`/champs requis par source au chargement ; formats de date US ambigus (`%m/%d/%Y`) ; garde de domaine sensible à la casse (scraping) ; `ARCHITECTURE-SPINE.md` toujours à `anthropic 0.119.0` alors que `1.2.0` est installé (aucun AC ne l'exige, dérive sans impact constaté) ; `scoring.yaml` relu deux fois par run (`collecter()` puis `pipeline.executer()`, faute d'exposer `Ponderations` sur `ResultatCollecte`) — coût négligible, non corrigé (trouvé en revue de la Story 1.8) ; le jeton issu de `gh auth token` (`publish.py`) n'est ni restreint ni validé en portée avant un usage non surveillé — compromis assumé, un `GITHUB_TOKEN` dédié reste disponible en option ; l'API Contents de GitHub a un plafond de charge utile par fichier (~1 Mo) non anticipé, prématuré à l'échelle actuelle du projet ; `_sha_existant`/`_publier` (partagés par la page et l'archive depuis la Story 1.9) n'ont pas de logique de nouvelle tentative si le `sha` change entre le `GET` et le `PUT` (écriture concurrente) — non atteignable aujourd'hui, système mono-opérateur, un seul run par nuit.
 
 **`Score.motifs` (`filter.py`) toujours calculé mais jamais consommé** — décidé hors périmètre pour justifier une recommandation en Story 1.7, confirmé toujours sans lecteur après le rendu HTML de la Story 1.8 (`render.py` ne l'utilise pas) ; resterait disponible si un besoin d'affichage l'exigeait plus tard.
 
@@ -246,11 +264,11 @@ Liste vivante complète : [deferred-work.md](../_bmad-output/implementation-arti
 - le `.git` était resté à la racine de `Projets_Perso/` (englobant à tort `Saas_chatbots/`, un projet distinct) — déplacé dans `Agent_veille_tech/.git` pour que ce dossier soit son propre dépôt, aligné sur le remote `petitlaye03/Agent_Veille_Tech` ;
 - `.venv` était un venv Windows inutilisable (`home = C:\Program Files\Python311`) — supprimé et reconstruit avec `uv sync` (`uv` installé via Homebrew, absent du Mac).
 
-**État actuel** : dépôt propre (Stories 1.4 à 1.8 committées et poussées). Aucun commit n'est fait automatiquement — décision du 2026-08-27 : les commits restent à la demande explicite d'Abdoulaye. Les dossiers `_bmad/`, `.claude/`, `_bmad-output/` sont suivis par git depuis le 2026-08-28 (réintégrés une fois le dépôt confirmé privé et le contenu relu — voir commit dédié entre les Stories 1.7 et 1.8).
+**État actuel** : dépôt propre (Stories 1.4 à 1.9 committées et poussées — Epic 1 entièrement terminé). Aucun commit n'est fait automatiquement — décision du 2026-08-27 : les commits restent à la demande explicite d'Abdoulaye. Les dossiers `_bmad/`, `.claude/`, `_bmad-output/` sont suivis par git depuis le 2026-08-28 (réintégrés une fois le dépôt confirmé privé et le contenu relu — voir commit dédié entre les Stories 1.7 et 1.8).
 
 **Secrets** : `ANTHROPIC_API_KEY` (`.env`, voir `.env.example`) — nécessaire pour que `enrich/llm.py` génère de vraies accroches. Aucune clé fournie à ce jour. `GITHUB_TOKEN` (Story 1.8, optionnel) — `publish.py` réutilise en repli la session `gh` déjà authentifiée localement (`gh auth token`) si cette variable est absente.
 
-**Second dépôt de publication, pas encore créé** (Story 1.8) : `publish.py` cible `petitlaye03/agent-veille-tech-digest` (nom ajustable), un dépôt public dédié uniquement à la page publiée — le dépôt de code reste privé. Ni ce dépôt ni GitHub Pages dessus n'existent encore à ce jour ; création différée, action réelle sous le compte d'Abdoulaye à confirmer explicitement.
+**Second dépôt de publication, pas encore créé** (Story 1.8) : `publish.py` cible `petitlaye03/agent-veille-tech-digest` (nom ajustable), un dépôt public dédié à la page publiée **et** à l'archive Markdown (Story 1.9) — le dépôt de code reste privé. Ni ce dépôt, ni GitHub Pages dessus, ni un fichier `.nojekyll` à sa racine (trouvé en revue de la Story 1.8, pertinent aussi pour l'archive — désactive le traitement Jekyll par défaut de GitHub Pages, qui appliquerait sinon son propre moteur Liquid à `index.html` et aux fichiers `.md` publiés) n'existent encore à ce jour ; création différée, action réelle sous le compte d'Abdoulaye à confirmer explicitement.
 
 ## 10. Référence technique — fichier par fichier
 
@@ -272,9 +290,9 @@ src/veille/
   collect.py              Orchestrateur de la collecte (dédup+filtre+quotas inclus)
   enrich/
     llm.py                 Frontière LLM unique (AD-7) : accroches en français + recommandation
-  render.py               Rendu HTML du digest (Jinja2)
-  publish.py              Publication via l'API Contents GitHub
-  pipeline.py             Orchestrateur du pipeline complet (AD-1) : collecte → enrichissement → rendu → publication
+  render.py               Rendu HTML + Markdown du digest (Jinja2)
+  publish.py              Publication (page + archive) via l'API Contents GitHub
+  pipeline.py             Orchestrateur du pipeline complet (AD-1) : collecte → enrichissement → rendu → publication (page + archive)
 
 config/
   sources.yaml            Socle de sources (4 aujourd'hui)
@@ -284,12 +302,13 @@ config/
 
 templates/
   digest.html.j2          Template Jinja2 de la page publiée
+  digest.md.j2            Template Jinja2 de l'archive Markdown datée
 
 .env.example              ANTHROPIC_API_KEY= et GITHUB_TOKEN= (optionnel) — le vrai .env n'est jamais versionné
 
 tests/
   conftest.py             Neutralise profil/pondérations/quotas par défaut
-  test_*.py               17 fichiers, 299 tests (détail §10.14)
+  test_*.py               17 fichiers, 323 tests (détail §10.14)
 ```
 
 ### 10.2 `src/veille/models.py` — le contrat canonique
@@ -399,33 +418,40 @@ Seul module du projet qui importe `anthropic` (vérifié mécaniquement par `gre
 - **`marquer_recommandation(entrees, classement, ponderations=Ponderations()) -> list[Entree]`** (Story 1.7) — fonction **additive**, appliquée après `enrichir()` : ne change ni sa signature ni son comportement (décision de conception actée avant le code, voir §6.7). Correspondance par identité d'objet (`id(entree.item)`), même convention que `rapport_classement`/`rapport_quotas` (`filter.py`) — même précondition non vérifiée qu'eux, documentée dans la docstring depuis la revue (un même `Item` référencé par deux `Entree` les ferait toutes deux basculer à `True`, non atteignable via `collecter()` aujourd'hui). Ne lève jamais : gagnant introuvable ou listes désynchronisées → `entrees` inchangée (`Entree` étant frozen, seule l'entrée gagnante devient une nouvelle instance via `dataclasses.replace`).
 - **Branché depuis la Story 1.8** dans `pipeline.py` — accroches (`enrichir`) et recommandation (`determiner_recommandation`/`marquer_recommandation`) sont désormais exercées dans un run réel, pas seulement testées sur des `Item`/`ItemScore` construits pour le test.
 
-### 10.10 `src/veille/render.py` — rendu HTML du digest (FR-9, Story 1.8)
+### 10.10 `src/veille/render.py` — rendu HTML et Markdown du digest (FR-9/10, Stories 1.8/1.9)
 
-Regroupe les `Entree` par registre et produit la page publiée à partir de `templates/digest.html.j2` (Jinja2). Aucune logique de scoring ni d'appel réseau ici — seulement de la mise en forme.
+Regroupe les `Entree` par registre et produit la page publiée (HTML) et l'archive datée (Markdown) à partir de `templates/digest.html.j2`/`digest.md.j2` (Jinja2). Aucune logique de scoring ni d'appel réseau ici — seulement de la mise en forme.
 
 - **`LIBELLES_REGISTRE`** — libellés d'affichage (`apprendre` → « Apprendre », etc.), dans l'ordre de `filter.CHAMPS_QUOTAS` (réutilisé tel quel, pas redéfini en second ordre parallèle).
-- **`_url_surs(url) -> str | None`** (trouvé en revue) — ne renvoie l'URL que si son schéma est `http(s)`, sinon `None`. L'autoescaping HTML de Jinja2 neutralise les métacaractères (`<`, `"`…) mais jamais le **schéma** d'une URI : sans ce garde-fou, un flux compromis déclarant `<link>javascript:...</link>` produirait un lien cliquable exécutable malgré l'échappement actif. Exposée comme fonction globale de l'environnement Jinja (`environnement.globals["url_surs"]`), appelée directement par le template.
-- **`_environnement_jinja() -> Environment`** — autoescaping **explicite** (`enabled_extensions=("html", "xml", "j2")`) : `select_autoescape()` sans argument ne reconnaît pas l'extension `.j2` du nom de template `digest.html.j2` (son extension au sens de cette fonction est `.j2`, pas `.html`) — l'échappement serait sinon silencieusement désactivé malgré le `.html` dans le nom. Piège identifié dès la création de la story, avant tout code.
-- **`rendre(entrees, date_generation) -> str`** — groupe par `entree.item.registre` dans l'ordre `CHAMPS_QUOTAS` ; un registre inconnu (typo dans `sources.yaml` — réellement atteignable, `repartir_par_quotas` conserve sans limite un registre qu'il ne reconnaît pas) est journalisé (`logger.warning`) plutôt que silencieusement perdu. `digest_vide` (trouvé en revue) se calcule sur les sections **réellement peuplées**, pas sur la seule non-vacuité de `entrees` — sinon une entrée égarée par un registre inconnu ne déclenchait ni son propre affichage ni le message honnête « rien à signaler ». Titre vide → repli sur l'accroche ; URL vide ou de schéma refusé → pas de lien cliquable.
+- **`_url_surs(url) -> str | None`** — ne renvoie l'URL que si son schéma est `http(s)` **et** qu'elle ne porte aucun `<`/`>` littéral (ce second critère ajouté en revue de la Story 1.9), sinon `None`. L'autoescaping HTML de Jinja2 neutralise les métacaractères mais jamais le **schéma** d'une URI (trouvé en revue de la Story 1.8) ; le rejet des chevrons sert le template Markdown, où la destination est enveloppée `<...>` (une URL contenant elle-même un chevron fermerait cette enveloppe prématurément). Exposée comme fonction globale des deux environnements Jinja, appelée directement par les deux templates.
+- **`_grouper_par_registre(entrees) -> tuple[sections, digest_vide]`** (extrait en Story 1.9) — regroupement par registre + calcul de `digest_vide`, **partagé** par `rendre()` et `rendre_markdown()` pour que les deux sorties ne divergent jamais. Un registre inconnu (typo dans `sources.yaml` — réellement atteignable, `repartir_par_quotas` conserve sans limite un registre qu'il ne reconnaît pas) est journalisé (`logger.warning`) plutôt que silencieusement perdu — journalisé **deux fois** par run puisque les deux fonctions de rendu y font chacune appel (dette mineure, §8). `digest_vide` se calcule sur les sections **réellement peuplées**, pas sur la seule non-vacuité de `entrees` (trouvé en revue de la Story 1.8).
+- **`_environnement_jinja() -> Environment`** — autoescaping HTML **explicite** (`enabled_extensions=("html", "xml", "j2")`) : `select_autoescape()` sans argument ne reconnaît pas l'extension `.j2` du nom `digest.html.j2` — l'échappement serait sinon silencieusement désactivé.
+- **`_echapper_markdown(texte) -> str`** (Story 1.9) — échappement Markdown explicite (Jinja2 n'a pas d'autoescape Markdown intégré). Échappe `` \`*_{}[]()!|~<> `` — caractères actifs **indépendamment de leur position**. `#`/`-`/`+`/`.` en sont **délibérément exclus** (trouvé en revue) : actifs seulement en tout début de ligne, jamais atteignable ici (texte toujours inséré au milieu d'une puce déjà ouverte), et les échapper casserait la recherche par texte (AC6) pour un cas courant (« GPT-5.2 »). Neutralise aussi les sauts de ligne incorporés (remplacés par un espace) — nécessaire pour que l'exclusion précédente reste sûre.
+- **`_environnement_jinja_markdown() -> Environment`** (Story 1.9) — environnement **séparé** de `_environnement_jinja()`, `autoescape=False`, filtre `markdown_safe` = `_echapper_markdown`. Piège évité : `digest.md.j2` se termine aussi par `.j2`, donc réutiliser le premier environnement aurait appliqué l'autoescape HTML (entités `&amp;` erronées) à un fichier Markdown.
+- **`rendre(entrees, date_generation) -> str`** — rend `digest.html.j2`. Titre vide → repli sur l'accroche ; URL vide/schéma refusé/chevrons → pas de lien cliquable.
+- **`rendre_markdown(entrees, date_generation) -> str`** (Story 1.9) — rend `digest.md.j2` ; mêmes garde-fous que `rendre()`, plus l'échappement Markdown et l'enveloppe `<...>` des liens (une URL avec parenthèses, ex. Wikipédia, casserait `[texte](url)` sans elle).
 
-### 10.11 `src/veille/publish.py` — publication (AD-8, Story 1.8)
+### 10.11 `src/veille/publish.py` — publication de la page et de l'archive (AD-8, Stories 1.8/1.9)
 
-Écrit/actualise `index.html` dans un **second dépôt GitHub, public, dédié uniquement à la sortie publiée** — le dépôt de code reste privé (décision actée avec Abdoulaye, voir §6.8). Via l'API Contents de GitHub (`PUT /repos/{owner}/{repo}/contents/{path}`), jamais un clone local ni un `subprocess` vers `git` (testabilité, pas de couplage à un dossier voisin supposé cloné).
+Écrit/actualise `index.html` (page) et `site/archive/YYYY-MM-DD.md` (archive datée) dans un **second dépôt GitHub, public, dédié uniquement à la sortie publiée** — le dépôt de code reste privé (décision actée avec Abdoulaye, voir §6.8). Via l'API Contents de GitHub (`PUT /repos/{owner}/{repo}/contents/{path}`), jamais un clone local ni un `subprocess` vers `git`.
 
-- **`PUBLISH_REPO`** — constante en dur (`petitlaye03/agent-veille-tech-digest`), même précédent que `MODELE` dans `enrich/llm.py` : AD-3 ne s'étend pas à un identifiant de dépôt de sortie.
-- **`_jeton() -> str | None`** — résolution à deux niveaux : `GITHUB_TOKEN` (`.env`, nettoyé des espaces — même piège de clé blanche que Story 1.6) en priorité, sinon repli sur `gh auth token` (subprocess capturé, jamais de plantage). Évite d'imposer un jeton dédié tout de suite : la session `gh` déjà authentifiée localement suffit.
+- **`PUBLISH_REPO`** — constante en dur (`petitlaye03/agent-veille-tech-digest`), même précédent que `MODELE` dans `enrich/llm.py`.
+- **`CHEMIN_PAGE`** (renommé depuis `CHEMIN_FICHIER` en Story 1.9) — `"index.html"`, distinct du chemin de l'archive (daté, construit à la volée dans `publier_archive`).
+- **`_jeton() -> str | None`** — résolution à deux niveaux : `GITHUB_TOKEN` (`.env`, nettoyé des espaces) en priorité, sinon repli sur `gh auth token`.
 - **`_client() -> httpx.Client | None`** — `None` si aucun jeton résolu, avertissement journalisé une seule fois.
-- **`_sha_existant(client) -> str | None`** — sha du fichier existant, `None` si absent. Seul un **404** vaut « absent » (trouvé en revue) : tout autre code (401/403/5xx) lève via `raise_for_status()`, isolé par `publier()` comme toute autre panne — les confondre aurait laissé un PUT sans `sha` tenter une création sur un fichier existant, masquant la vraie cause.
-- **`publier(html, client=None) -> bool`** — `GET` préalable pour le `sha`, puis `PUT` (création si absent, mise à jour sinon). Isolation totale (réseau, 401, 404, timeout), ne lève jamais, `False` sur échec. Un client fourni explicitement (tests) n'est jamais fermé par cette fonction.
-- **Non encore validé contre l'API réelle** : le dépôt de sortie n'existe pas encore (voir §8, §9).
+- **`_sha_existant(client, chemin) -> str | None`** (paramétrée par le chemin depuis la Story 1.9, sert la page **et** l'archive) — sha du fichier existant, `None` si absent. Seul un **404** vaut « absent » : tout autre code (401/403/5xx) lève via `raise_for_status()`, isolé comme toute autre panne.
+- **`_publier(chemin, contenu, client, quoi, categorie) -> bool`** (extrait en Story 1.9, cœur partagé) — `GET` préalable pour le `sha`, puis `PUT` (création si absent, mise à jour sinon). Isolation totale, ne lève jamais, `False` sur échec. `categorie` (`"page"`/`"archive"`) sert uniquement à donner à chacune sa **propre** trace complète au premier échec (trouvé en revue — un booléen unique partagé aurait fait perdre la trace du second échec d'un même run).
+- **`publier(html, client=None) -> bool`** — appelant fin de `_publier(CHEMIN_PAGE, ...)`.
+- **`publier_archive(markdown, date_digest, client=None) -> bool`** (Story 1.9) — appelant fin de `_publier`, chemin `f"site/archive/{date_digest.isoformat()}.md"`. Relancer pour la même date écrase l'archive existante (upsert par `sha`, AD-9), jamais un doublon.
+- **Non encore validé contre l'API réelle** : le dépôt de sortie n'existe pas encore, ni un `.nojekyll` à sa racine (voir §8, §9).
 
-### 10.12 `src/veille/pipeline.py` — orchestrateur du pipeline complet (AD-1, Story 1.8)
+### 10.12 `src/veille/pipeline.py` — orchestrateur du pipeline complet (AD-1, Stories 1.8/1.9)
 
-Point d'entrée unique : `collecter()` → `enrichir()` → `marquer_recommandation()` → `rendre()` → `publier()`.
+Point d'entrée unique : `collecter()` → `enrichir()` → `marquer_recommandation()` → `rendre()` + `publier()` (page) → `rendre_markdown()` + `publier_archive()` (archive).
 
-- **`executer(sources_path=None, profil_path=None, scoring_path=None, quotas_path=None, llm_client=None, publish_client=None) -> bool`** — chemins de config résolus à l'appel (même contrat que `collecter()`, substituables par les tests) ; `scoring_path` résolu via `collect.DEFAULT_SCORING_PATH` pour rester cohérent avec le chemin que `collecter()` a réellement utilisé. `llm_client` n'est volontairement pas typé `anthropic.Anthropic | None` : l'importer romprait l'invariant AD-7 (un seul point d'import du SDK, vérifié par `grep`) pour une simple annotation. **Intégralité du corps enveloppée d'un filet de sécurité** (trouvé en revue) : `collecter`/`enrichir`/`marquer_recommandation`/`publier` dégradent déjà proprement de leur côté, mais `rendre()` n'a pas cette garantie propre (un template manquant lèverait `TemplateNotFound`) — sans ce filet, l'affirmation « ne lève jamais » de la fonction aurait été fausse.
-- **`main()`** — même patron que `collect.py` (`uv run python -m veille.pipeline`). Code de sortie non nul sur échec (`sys.exit`, trouvé en revue) : sans lui, un futur planificateur de tâches (FR-11, Epic 3) n'aurait aucun moyen de détecter une nuit en échec autrement qu'en analysant les logs.
-- **Résout la partie d'AD-1 qui a un AC réel** (voir §7#24) — le chaînage interne de `collecter()` (collecte+dédup+filtre+quotas) n'est volontairement pas défait : toucher à du code déjà testé sans qu'aucun AC ne l'exige aurait été une sur-portée.
+- **`executer(sources_path=None, profil_path=None, scoring_path=None, quotas_path=None, llm_client=None, publish_client=None) -> bool`** — chemins de config résolus à l'appel ; `scoring_path` résolu via `collect.DEFAULT_SCORING_PATH` pour rester cohérent avec le chemin que `collecter()` a réellement utilisé. `llm_client` n'est volontairement pas typé `anthropic.Anthropic | None` (romprait l'invariant AD-7). **La page est rendue et publiée avant même que l'archive soit rendue** (trouvé en revue de la Story 1.9) : sans cet ordre, un `rendre_markdown()` qui lève après un `rendre()` réussi ferait perdre une page déjà prête. Retourne `True` seulement si la page **et** l'archive sont publiées avec succès (`page_ok and archive_ok`) — les deux toujours tentées, un échec de l'une n'empêchant jamais la tentative de l'autre. **Intégralité du corps enveloppée d'un filet de sécurité** : `collecter`/`enrichir`/`marquer_recommandation`/`publier`/`publier_archive` dégradent déjà proprement, mais `rendre()`/`rendre_markdown()` n'ont pas cette garantie propre (un template manquant lèverait `TemplateNotFound`).
+- **`main()`** — même patron que `collect.py`. Code de sortie non nul sur échec (`sys.exit`) : sans lui, un futur planificateur de tâches (FR-11, Epic 3) n'aurait aucun moyen de détecter une nuit en échec.
+- **Résout la partie d'AD-1 qui a un AC réel** (voir §7#24) — le chaînage interne de `collecter()` (collecte+dédup+filtre+quotas) n'est volontairement pas défait.
 
 ### 10.13 Fichiers de configuration
 
@@ -434,11 +460,12 @@ Point d'entrée unique : `collecter()` → `enrichir()` → `marquer_recommandat
 - **`config/scoring.yaml`** — pondérations : `prioritaire: 10`, `signal_fort: 15`, `domaine: 5`, `secondaire: 2`, `bruit: -20`, `seuil_bruit: -5`, `marge_recommandation: 10` (Story 1.7 — rejetée si ≤ 0, repli sur le défaut).
 - **`config/quotas.yaml`** — quotas : `apprendre: 3`, `ce_qui_bouge: 3`, `pour_le_metier: 2`.
 - **`templates/digest.html.j2`** (Story 1.8) — template Jinja2 de la page publiée : structure sémantique, viewport meta tag, CSS embarqué (palette + typographie + media query `prefers-color-scheme: dark`), section par registre, marque de recommandation, lien conditionné à `url_surs()`.
+- **`templates/digest.md.j2`** (Story 1.9) — template Jinja2 de l'archive Markdown datée : mêmes sections/garde-fous que la page HTML, titre/accroche passés par le filtre `markdown_safe`, lien enveloppé `[texte](<url>)`.
 - **`.env.example`** — `ANTHROPIC_API_KEY=` (Story 1.6) et `GITHUB_TOKEN=` (Story 1.8, optionnel — repli sur `gh auth token`) ; le vrai `.env` est gitignoré (`!.env.example` annule l'ignorance générique de `.env.*`), vérifié sans fuite dans le dépôt ni son historique.
 
 ### 10.14 Tests
 
-299 tests, aucun appel réseau ni subprocess réel (fixtures locales, clients simulés, résolution de jeton monkeypatchée). `tests/conftest.py` neutralise `profil.md`/`scoring.yaml`/`quotas.yaml` par défaut pour tous les tests (fixture `autouse`), afin qu'aucun test ne dépende implicitement de la configuration de production.
+323 tests, aucun appel réseau ni subprocess réel (fixtures locales, clients simulés, résolution de jeton monkeypatchée). `tests/conftest.py` neutralise `profil.md`/`scoring.yaml`/`quotas.yaml` par défaut pour tous les tests (fixture `autouse`), afin qu'aucun test ne dépende implicitement de la configuration de production.
 
 | Fichier | Périmètre | Tests |
 |---|---|---|
@@ -456,18 +483,20 @@ Point d'entrée unique : `collecter()` → `enrichir()` → `marquer_recommandat
 | `test_collect.py` | `run()`, cas d'erreur de haut niveau, `resultats_repartis` | 10 |
 | `test_rapport_collecte.py` | Observabilité (`RapportSource`, états muette/échec) | 6 |
 | `test_collecte_integration.py` | **Chemin réel** config → `collecter()` → rapport, pour chaque mécanisme | 25 |
-| `test_render.py` | Rendu HTML : sections, palette, dark mode, échappement, schéma d'URI, registre inconnu | 17 |
-| `test_publish.py` | Publication : résolution de jeton, création/mise à jour, isolation de panne | 12 |
-| `test_pipeline.py` | Orchestrateur : chemin complet, dégradation sans clé/jeton, filet de sécurité | 4 |
+| `test_render.py` | Rendu HTML + Markdown : sections, palette, dark mode, échappement (HTML et Markdown), schéma/chevrons d'URI, registre inconnu | 32 |
+| `test_publish.py` | Publication (page + archive) : résolution de jeton, création/mise à jour, isolation de panne, trace par catégorie | 19 |
+| `test_pipeline.py` | Orchestrateur : chemin complet (page + archive), dégradation sans clé/jeton, filet de sécurité, corrélation contenu↔chemin | 6 |
 
 ## 11. Prochaine étape
 
-**Story 1.9 — Archiver chaque digest en Markdown** (FR-10). À lancer via `bmad-create-story` (elle n'est pas encore rédigée en détail dans `implementation-artifacts/`) puis `bmad-dev-story`, revue via `bmad-code-review`.
+**Epic 1 est entièrement terminé** (Stories 1.1 à 1.9, toutes `done`) : le pipeline complet existe, de la collecte à la double publication (page + archive), à l'échelle réduite visée (3-5 sources). Reste à trancher **quel Epic attaquer ensuite** — décision d'Abdoulaye, pas encore prise :
 
-Points d'attention déjà identifiés pour les stories à venir (§7, §8) :
-- **Story 1.9** : `templates/digest.md.j2` (Markdown, à côté du `digest.html.j2` existant), archive datée dans `site/archive/YYYY-MM-DD.md` du dépôt de sortie — même dépôt public dédié que la page HTML (Story 1.8). Probablement une extension de `render.py`/`publish.py` plutôt que de nouveaux modules.
-- **Avant ou pendant la Story 1.9** : créer le second dépôt GitHub public (`publish.py` le cible déjà, `PUBLISH_REPO`) et activer GitHub Pages dessus — prérequis non exécuté en Story 1.8, seule chose qui manque pour valider `publish.py` contre l'API réelle.
-- **Epic 2** : le registre `pour_le_metier` est structurellement vide dans le socle actuel — une source emploi/carrière le comblerait.
-- **Dès qu'une clé `ANTHROPIC_API_KEY` sera fournie** : validation réelle de `enrich/llm.py` contre l'API véritable — langue, longueur, coût mesuré. `enrich/llm.py` est déjà branché dans un run réel depuis la Story 1.8 ; seule la validation contre l'API véritable manque.
-- `Score.motifs` (`filter.py`) existe toujours et n'est consommé par rien, y compris après le rendu HTML de la Story 1.8 — resterait disponible si un besoin d'affichage l'exigeait plus tard.
-- **Epic 3** : un bandeau d'échec nocturne sur la page publiée suppose un état de run persistant (`store.py`/SQLite, AD-5) qui n'existe pas encore — trouvé en revue de la Story 1.8.
+- **Epic 2 — Socle élargi (15-20 sources) et robustesse aux pannes.** Comble une lacune déjà identifiée (le registre `pour_le_metier` est structurellement vide, aucune source ne le déclare) et ajoute la résilience (timeout réseau, retry/backoff, distinction 404 vs flux malformé) avant d'élargir le volume — probablement le prérequis le plus naturel avant une exécution nocturne sans supervision (Epic 3).
+- **Epic 3 — Génération nocturne automatique.** Rend le pipeline réellement autonome (ordonnancement, idempotence du job, état « déjà vu » validé après publication) — le bénéfice le plus visible au quotidien (Abdoulaye n'a plus rien à déclencher), mais suppose `store.py`/SQLite (AD-5) encore à construire.
+- **Epic 4 — Santé des sources et découverte.** Le moins urgent tant que le socle reste petit et géré manuellement.
+
+**Avant l'un ou l'autre, ou en parallèle** : créer le second dépôt GitHub public de sortie et y activer GitHub Pages (+ `.nojekyll`) — seule chose qui manque pour valider `publish.py` (page et archive) contre l'API réelle plutôt qu'en dégradation simulée. Et dès qu'une clé `ANTHROPIC_API_KEY` sera fournie : valider `enrich/llm.py` contre l'API véritable (langue, longueur, coût mesuré) — déjà branché dans un run réel depuis la Story 1.8, seule la validation manque.
+
+Autres points ouverts (§7, §8), non liés à un Epic en particulier :
+- `Score.motifs` (`filter.py`) existe toujours et n'est consommé par rien — resterait disponible si un besoin d'affichage l'exigeait plus tard.
+- Le doublon de l'avertissement « registre inconnu » (`render.py`, Story 1.9) — bruit de log mineur, pas fonctionnel, non corrigé faute d'un correctif proportionné.
