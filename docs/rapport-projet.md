@@ -8,9 +8,9 @@
 > code, pas un instantané figé. La §10 (Référence technique) en particulier
 > doit être corrigée dès qu'un fichier qu'elle décrit change de comportement.
 >
-> **Dernière mise à jour :** 2026-08-31, fin de la Story 1.9 (dev + revue).
-> **Story courante :** aucune (1.9 terminée, `done` — **Epic 1 entièrement terminé**).
-> **Prochaine étape :** choisir le prochain Epic à attaquer (2, 3 ou 4 — voir §11).
+> **Dernière mise à jour :** 2026-09-01, fin de la Story 2.1 (dev + revue).
+> **Story courante :** aucune (2.1 terminée, `done` — **Epic 2 démarré**, 1/4 stories faites).
+> **Prochaine étape :** Story 2.2 (continuer en panne) — voir §11.
 
 ---
 
@@ -84,7 +84,7 @@ Projet mené en méthode **BMAD** : brief → PRD → architecture → epics/sto
 | Epic | Contenu | État |
 |---|---|---|
 | **Epic 1** | Un premier digest, réel, bout en bout (3-5 sources) | ✅ **Terminé** — Stories 1.1-1.9 toutes `done` |
-| **Epic 2** | Socle élargi (15-20 sources) et robustesse aux pannes | ⏳ Pas commencé |
+| **Epic 2** | Socle élargi (15-20 sources) et robustesse aux pannes | 🟡 En cours — Story 2.1 `done`, 2.2/2.3/2.4 à faire |
 | **Epic 3** | Génération nocturne automatique | ⏳ Pas commencé |
 | **Epic 4** | Santé des sources et découverte de nouvelles sources | ⏳ Pas commencé |
 
@@ -104,7 +104,13 @@ Projet mené en méthode **BMAD** : brief → PRD → architecture → epics/sto
 
 > ⚠️ **Note d'hygiène à traiter** : les fichiers de story 1.2 et 1.3 portent encore `Status: review` dans leur frontmatter, alors que leurs Change Log respectifs démontrent une revue menée et conclue (correctifs appliqués, suites vertes). Seules les Stories 1.4 et 1.5 ont été explicitement repassées à `done`. À corriger mécaniquement (`review` → `done`) la prochaine fois qu'on touche à ces fichiers.
 
-**Total tests actuel : 323, tous verts** (`uv run pytest`).
+### Détail Epic 2
+
+| Story | Titre | Statut | Tests |
+|---|---|---|---|
+| 2.1 | Étendre le socle aux 15-20 sources visées | ✅ `done` | 323 → **324** |
+
+**Total tests actuel : 324, tous verts** (`uv run pytest`).
 
 ## 6. Ce qui est livré, story par story
 
@@ -206,6 +212,22 @@ Correctif de robustesse le plus significatif : `pipeline.executer()` affirmait q
 
 9 correctifs, 0 report, 4 rejets — dont le doublon de l'avertissement « registre inconnu » (un correctif propre exigerait un changement disproportionné ou introduirait un bug pire) et le risque `.nojekyll` qui s'étend maintenant à l'archive (déjà suivi comme prérequis d'infrastructure, pas du code). 314 → 323 tests. Détail complet : [1-9-archive-markdown.md](../_bmad-output/implementation-artifacts/1-9-archive-markdown.md).
 
+### 6.10 — Story 2.1 : étendre le socle aux 15-20 sources visées — Epic 2 démarré
+
+Première story de l'Epic 2. Pure extension de configuration : `config/sources.yaml` passe de 4 à **17 sources** (13 ajoutées : 8 `apprendre`, 3 `ce_qui_bouge`, 2 `pour_le_metier`), toutes de types déjà implémentés (`rss`, `json`) — **aucune modification de `src/veille/`**, conformément à l'AC1. Les 13 URL candidates ont été vérifiées par requête réelle avant d'entrer dans le fichier (discipline établie depuis la Story 1.1) : une (Le Monde Informatique, proposée par l'addendum du brief) s'est révélée **404 réel**, remplacée par le flux général du même site.
+
+**Dette fermée** : le registre `pour_le_metier`, structurellement vide depuis la Story 1.5 (aucune source ne le déclarait), reçoit ses deux premières sources (`decideo`, `lemonde-informatique`) — verrouillé par un nouveau garde-fou (`test_le_socle_couvre_le_registre_pour_le_metier`). Confirmé fonctionnellement fermé, pas seulement déclaratif : l'exécution réelle de Task 4 montre 2 items du registre atteignant effectivement le classement final.
+
+**Deux écarts trouvés et corrigés pendant l'implémentation elle-même** (avant même la revue) :
+- `hacker-news` ne pouvait pas prendre la `priorite: 0` prévue au plan initial (garde-fou existant `test_chaque_source_declare_une_priorite`, qui ne distingue pas priorité absente et priorité explicitement nulle) — corrigé par `priorite: 1`, sans toucher au test.
+- `hacker-news` était **MUETTE** au premier passage d'exécution réelle contre le socle complet (Task 4) : la réponse Algolia est un objet `{"hits": [...]}`, pas une liste à la racine, et l'entrée ne déclarait pas `racine: hits` — corrigé en configuration pure.
+
+**Exécution réelle contre les 17 sources (Task 4)** : 2800 items collectés, 8 retenus au digest final, **aucune source en échec** (AD-6 intact sur l'ensemble du socle élargi). Défaut trouvé et **non corrigé ici** (hors périmètre « sans modification de code » de l'AC1) : `rss_connector._to_utc_datetime` ne retombe jamais sur `updated_parsed` quand `published_parsed` est absent — mal-date silencieusement, en permanence, les items de 5 sources (4 dépôts GitHub + Le Monde Informatique, flux Atom purs/RDF) avec la date de collecte plutôt que la vraie date de publication. Sans conséquence de justesse aujourd'hui (tri par score, pas par fraîcheur), mais consequential dès l'Epic 3 (état « déjà vu »). Documenté en détail dans `deferred-work.md`.
+
+**Revue de code (Sonnet 5, même modèle que l'implémentation)** — les 3 couches ont convergé sur le même défaut le plus sérieux (le bug `updated_parsed` ci-dessus, déjà trouvé et documenté par la story elle-même), confirmant qu'il n'y avait rien de caché. Constat nouveau, convergent (Blind Hunter + Acceptance Auditor) : l'URL Le Monde Informatique retenue en Task 1 (`.../rss/rss.xml`) répond en réalité par une **redirection 301** vers `.../flux-rss/rss.xml` (200) — la vérification `curl` de Task 1 avait suivi la redirection sans le signaler explicitement. Sans conséquence fonctionnelle (`httpx`/`feedparser` suivent les redirections), corrigé pour pointer directement sur la destination canonique. Second constat convergent : le commentaire d'en-tête partagé de `sources.yaml` ne documentait ni le piège `priorite: 0` ni le piège `racine` — corrigé, les deux sont maintenant dans la documentation partagée plutôt que seulement dans le commentaire inline d'une source.
+
+4 correctifs, 1 report (le bug `updated_parsed`, déjà tracé), 2 rejets — dont la critique sur la priorité uniforme des 4 dépôts GitHub (déjà actée comme délibérée dans les Dev Notes). 323 → 324 tests. Détail complet : [2-1-etendre-le-socle.md](../_bmad-output/implementation-artifacts/2-1-etendre-le-socle.md).
+
 ## 7. Journal des décisions structurantes (cumulatif)
 
 Ce journal ne répète pas le détail des stories (§6) ; il ne garde que ce qui **contraint les stories suivantes**.
@@ -239,12 +261,24 @@ Ce journal ne répète pas le détail des stories (§6) ; il ne garde que ce qui
 27. **Neutraliser les sauts de ligne incorporés avant d'alléger un ensemble de caractères échappés en fonction de leur position** — retirer l'échappement de caractères seulement actifs en début de ligne (décision #26) n'est sûr que si le texte inséré ne peut pas lui-même introduire une nouvelle ligne qui les y replacerait ; `Item.titre`/`Entree.accroche` n'ont aucune garantie de contenu mono-ligne (Story 1.9).
 28. **Publier le premier des deux artefacts indépendants dès qu'il est prêt, pas après avoir tenté de produire les deux** — `pipeline.executer()` rendait la page et l'archive avant de publier l'une ou l'autre ; un échec de rendu du second faisait perdre le premier, pourtant déjà réussi. Un filet de sécurité englobant ne compense pas un mauvais ordonnancement des effets de bord qu'il protège (Story 1.9).
 29. **Un drapeau « une fois par run » qui protège deux occurrences logiquement distinctes doit être scindé par catégorie, pas partagé** — le même réflexe qui a dédupliqué un avertissement (décision implicite depuis la Story 1.6) peut, mal appliqué, supprimer la trace de diagnostic d'un second échec réellement nouveau simplement parce qu'un premier a déjà eu lieu dans le même run (Story 1.9 : trace complète par catégorie page/archive, pas un booléen global).
+30. **Un défaut par dataclass rend une valeur explicite indiscernable d'une valeur absente** — `SourceConfig.priorite: int = 0` fait qu'un `0` écrit à dessein dans `sources.yaml` et un champ simplement omis produisent le même objet chargé ; un garde-fou qui interdit « 0 » ne peut donc interdire que les deux à la fois, jamais l'un sans l'autre. Une échelle de configuration documentée (ici : « 0 = agrégateur ») doit être vérifiée contre les garde-fous existants avant d'être utilisée telle quelle — pas seulement contre le schéma du type (Story 2.1).
+31. **Vérifier une URL par requête réelle doit inclure le premier code de statut, pas seulement la destination finale après redirection** — `curl`/`httpx`/`feedparser` suivent les redirections par défaut, donc une vérification qui ne regarde que le contenu final peut affirmer « HTTP 200 confirmé » pour une URL qui répond en réalité 301. Sans conséquence fonctionnelle ici (les clients de ce projet suivent tous les redirections), mais l'affirmation elle-même était imprécise — et la config doit pointer sur la destination canonique, pas sur un alias qui dépend de la bonne volonté continue de l'éditeur à le maintenir (Story 2.1, trouvé indépendamment par 2 des 3 couches de revue).
+32. **Un connecteur générique qui suppose une forme de réponse par défaut doit voir cette hypothèse documentée à l'endroit où elle se vérifie, pas seulement dans le code** — `json_connector.fetch` suppose une liste à la racine sauf si `racine` est déclaré ; l'absence de ce champ ne lève aucune exception, seulement un avertissement et une source silencieusement vide (0 item, sans échec visible ailleurs qu'un log). Trouvé uniquement par l'exécution réelle de Task 4, pas par la configuration déclarée ni par un test unitaire — confirme la leçon #14 (vérifier deux fois, en conditions réelles) pour la configuration autant que pour le code (Story 2.1).
 
 ## 8. Dette technique et travail reporté
 
 Liste vivante complète : [deferred-work.md](../_bmad-output/implementation-artifacts/deferred-work.md). Résumé de ce qui reste ouvert, par destination :
 
-**Epic 2 (socle élargi, robustesse)** — timeout réseau sur `feedparser`/`httpx`, distinction 404 vs flux malformé, retry/backoff sur 429/5xx, plafond de taille des réponses HTTP, mode d'extraction « carte » pour le scraping (titre/date en frères de l'ancre, pas en descendants — bloque l'ajout de la plupart des blogs WordPress), en-têtes/authentification pour les API JSON (bloque Kaggle, prévu au socle v1), `url_modele` limité à `{guid}`, **`config/sources.yaml` ne déclare aucune source en registre `pour_le_metier`** (la 3ᵉ section du digest sera structurellement vide tant que cette lacune n'est pas comblée — trouvé en revue de la Story 1.5).
+**Epic 2 (socle élargi, robustesse)** — timeout réseau sur `feedparser`/`httpx`, distinction 404 vs flux malformé, retry/backoff sur 429/5xx, plafond de taille des réponses HTTP, mode d'extraction « carte » pour le scraping (titre/date en frères de l'ancre, pas en descendants — bloque l'ajout de la plupart des blogs WordPress), en-têtes/authentification pour les API JSON (bloque Kaggle, prévu au socle v1 mais toujours pas construit — la Story 2.1 a explicitement laissé Kaggle de côté pour cette raison), `url_modele` limité à `{guid}`.
+
+**Dette fermée en Story 2.1** : ~~`config/sources.yaml` ne déclare aucune source en registre `pour_le_metier`~~ — 2 sources ajoutées (`decideo`, `lemonde-informatique`), la 3ᵉ section du digest reçoit désormais des items réels.
+
+**Trouvé en Story 2.1, reporté** :
+- **`rss_connector._to_utc_datetime` ne retombe jamais sur `updated_parsed` quand `published_parsed` est absent** — mal-date silencieusement, en permanence (pas seulement une nuit), les items des flux Atom purs et RDF (4 dépôts GitHub + Le Monde Informatique, 5/17 sources du socle actuel). Sans conséquence de justesse aujourd'hui (tri par score, pas par fraîcheur), mais consequential dès qu'une logique s'appuiera sur la date réelle (état « déjà vu » de l'Epic 3). Hors périmètre de la Story 2.1 (« sans modification de code ») — correctif proposé : replier sur `entry.get("updated_parsed")` avant le retour par défaut à `datetime.now()`.
+- **`pour_le_metier` ferme la dette de présence, mais son rendement réel reste faible** — sur l'unique exécution réelle documentée, seul `decideo` a contribué au digest (`lemonde-informatique` : 20 collectés, 0 retenus, écarté comme bruit du profil). `config/profil.md` (vocabulaire dense en ingénierie ML/LLM) est probablement mal aligné lexicalement avec la presse IT généraliste FR — à surveiller si le registre reste creux sur plusieurs nuits une fois le pipeline nocturne actif (Epic 3), pourrait justifier un enrichissement ciblé de `profil.md` plutôt qu'une nouvelle source.
+- **Le seuil `seuil_signal: 250` de Hacker News n'a produit aucun item retenu sur l'unique exécution réelle documentée** (20 collectés, 0 retenus) — cohérent avec le mécanisme, pas nécessairement avec la tendance « ~5 items/jour » de l'addendum du brief mesurée sur un tirage différent. Un seul relevé ne suffit pas à confirmer ou invalider le réglage ; à réévaluer une fois l'Epic 3 en place (plusieurs nuits consécutives).
+- **OpenRouter (signal marché, addendum) n'a pas été ajouté** — ne nécessite aucune authentification, mais sa valeur documentée (diff quotidien des `id` de modèles) suppose un état persistant jour-sur-jour que ce projet n'a pas encore (`store.py`/SQLite, Epic 3). Collecter sans diffing produirait du bruit, pas du signal.
+- **`datagen-podcast` (312 entrées) et `eugene-yan` (212 entrées) renvoient l'intégralité de leur archive à chaque run**, pas seulement les récents — amplifie la limitation déjà connue (pas d'état « déjà vu » persistant) : les mêmes anciens contenus peuvent ressortir bien classés plusieurs nuits de suite une fois le pipeline nocturne actif.
 
 **Epic 3 (nocturne automatique)** — délai d'attente global sur `feedparser` ; ordonnancement (Planificateur de tâches, FR-11) ; un bandeau d'échec nocturne sur la page publiée suppose un état de run persistant que `store.py`/SQLite (AD-5) ne fournit pas encore — trouvé en revue de la Story 1.8, le pipeline peut aujourd'hui publier un « rien à signaler » aussi bien pour une nuit calme que pour une collecte réellement en panne, sans les distinguer ; le chaînage interne de `collecter()` (collecte+dédup+filtre+quotas en une seule fonction, tension AD-1 non entièrement résolue par la Story 1.8, voir §7#24) pourrait être éclaté à cette occasion si un besoin réel apparaît ; `rendre()`/`rendre_markdown()` journalisent chacun indépendamment un éventuel « registre inconnu » via leur propre appel à `_grouper_par_registre` — un même run le journalise donc deux fois (trouvé en revue de la Story 1.9, non corrigé : un correctif propre exigerait de changer la signature publique des deux fonctions pour leur passer un regroupement déjà calculé, ou introduirait un drapeau persistant qui supprimerait à tort un avertissement réellement nouveau plus tard).
 
@@ -264,7 +298,7 @@ Liste vivante complète : [deferred-work.md](../_bmad-output/implementation-arti
 - le `.git` était resté à la racine de `Projets_Perso/` (englobant à tort `Saas_chatbots/`, un projet distinct) — déplacé dans `Agent_veille_tech/.git` pour que ce dossier soit son propre dépôt, aligné sur le remote `petitlaye03/Agent_Veille_Tech` ;
 - `.venv` était un venv Windows inutilisable (`home = C:\Program Files\Python311`) — supprimé et reconstruit avec `uv sync` (`uv` installé via Homebrew, absent du Mac).
 
-**État actuel** : dépôt propre (Stories 1.4 à 1.9 committées et poussées — Epic 1 entièrement terminé). Aucun commit n'est fait automatiquement — décision du 2026-08-27 : les commits restent à la demande explicite d'Abdoulaye. Les dossiers `_bmad/`, `.claude/`, `_bmad-output/` sont suivis par git depuis le 2026-08-28 (réintégrés une fois le dépôt confirmé privé et le contenu relu — voir commit dédié entre les Stories 1.7 et 1.8).
+**État actuel** : dépôt propre (Stories 1.4 à 1.9 committées et poussées — Epic 1 entièrement terminé ; Story 2.1 committée et poussée — Epic 2 démarré). Aucun commit n'est fait automatiquement — décision du 2026-08-27 : les commits restent à la demande explicite d'Abdoulaye. Les dossiers `_bmad/`, `.claude/`, `_bmad-output/` sont suivis par git depuis le 2026-08-28 (réintégrés une fois le dépôt confirmé privé et le contenu relu — voir commit dédié entre les Stories 1.7 et 1.8).
 
 **Secrets** : `ANTHROPIC_API_KEY` (`.env`, voir `.env.example`) — nécessaire pour que `enrich/llm.py` génère de vraies accroches. Aucune clé fournie à ce jour. `GITHUB_TOKEN` (Story 1.8, optionnel) — `publish.py` réutilise en repli la session `gh` déjà authentifiée localement (`gh auth token`) si cette variable est absente.
 
@@ -455,7 +489,7 @@ Point d'entrée unique : `collecter()` → `enrichir()` → `marquer_recommandat
 
 ### 10.13 Fichiers de configuration
 
-- **`config/sources.yaml`** — 4 sources aujourd'hui : `openai-news` (RSS, `ce_qui_bouge`), `huggingface-blog` (RSS, `apprendre`), `hf-daily-papers` (JSON, `apprendre`, `seuil_signal: 15`), `anthropic-news` (scrape, `ce_qui_bouge`). **Aucune source en `pour_le_metier`** (dette, §8).
+- **`config/sources.yaml`** — **17 sources depuis la Story 2.1** (4 à l'origine, +13). D'origine : `openai-news` (RSS, `ce_qui_bouge`), `huggingface-blog` (RSS, `apprendre`), `hf-daily-papers` (JSON, `apprendre`, `seuil_signal: 15`), `anthropic-news` (scrape, `ce_qui_bouge`). Ajoutées en Story 2.1 : 8 en `apprendre` (4 dépôts GitHub via `releases.atom` — `llama.cpp`, `vllm`, `transformers`, `ollama` — plus `eugene-yan`, `simon-willison`, `statquest-youtube`, `datagen-podcast`), 3 en `ce_qui_bouge` (`brief-ia`, `hacker-news` en JSON avec `racine: hits`/`seuil_signal: 250`, `tldr-ai`), 2 en `pour_le_metier` (`decideo`, `lemonde-informatique` — **dette fermée**, ce registre était vide depuis la Story 1.5). Deux pièges découverts et désormais documentés dans le commentaire d'en-tête du fichier : une `priorite: 0` explicite est indiscernable d'une priorité absente (garde-fou existant l'interdit ; utiliser `1` pour un agrégateur) ; une réponse JSON dont la racine n'est pas une liste (ex. `{"hits": [...]}`) exige `racine: <clé>`, sans quoi la source est silencieusement ignorée.
 - **`config/profil.md`** — profil de filtrage d'Abdoulaye : 5 sections de mots-clés (`Thèmes prioritaires`, `Signal fort`, `Domaines d'application`, `Thèmes secondaires`, `Bruit`) + une section `Posture` (prose, ignorée par le parseur). Réécrite en Story 1.5 (revue) pour que la section Bruit ne contienne que des mots-clés atomiques, pas des phrases.
 - **`config/scoring.yaml`** — pondérations : `prioritaire: 10`, `signal_fort: 15`, `domaine: 5`, `secondaire: 2`, `bruit: -20`, `seuil_bruit: -5`, `marge_recommandation: 10` (Story 1.7 — rejetée si ≤ 0, repli sur le défaut).
 - **`config/quotas.yaml`** — quotas : `apprendre: 3`, `ce_qui_bouge: 3`, `pour_le_metier: 2`.
@@ -465,13 +499,13 @@ Point d'entrée unique : `collecter()` → `enrichir()` → `marquer_recommandat
 
 ### 10.14 Tests
 
-323 tests, aucun appel réseau ni subprocess réel (fixtures locales, clients simulés, résolution de jeton monkeypatchée). `tests/conftest.py` neutralise `profil.md`/`scoring.yaml`/`quotas.yaml` par défaut pour tous les tests (fixture `autouse`), afin qu'aucun test ne dépende implicitement de la configuration de production.
+324 tests, aucun appel réseau ni subprocess réel dans la suite automatisée (fixtures locales, clients simulés, résolution de jeton monkeypatchée) — seule Task 4 de la Story 2.1 a fait une exécution réelle ponctuelle, hors suite `pytest`, documentée dans son Dev Agent Record. `tests/conftest.py` neutralise `profil.md`/`scoring.yaml`/`quotas.yaml` par défaut pour tous les tests (fixture `autouse`), afin qu'aucun test ne dépende implicitement de la configuration de production.
 
 | Fichier | Périmètre | Tests |
 |---|---|---|
 | `test_models.py` | `Item`, `Entree` (dont `recommandee`), validation de `date_publication` | 9 |
 | `test_config.py` | `load_sources`, validation de `seuil_signal` | 11 |
-| `test_socle_reel.py` | Garde-fous sur les fichiers de config **réels** (`sources.yaml`, `scoring.yaml`, `quotas.yaml`) | 14 |
+| `test_socle_reel.py` | Garde-fous sur les fichiers de config **réels** (`sources.yaml`, `scoring.yaml`, `quotas.yaml`) — +1 en Story 2.1 (présence du registre `pour_le_metier`) | 15 |
 | `test_rss_connector.py` | Connecteur RSS | 6 |
 | `test_json_connector.py` | Connecteur JSON, extraction du signal | 8 |
 | `test_scrape_connector.py` | Connecteur scraping, `robots.txt` | 9 |
@@ -489,10 +523,12 @@ Point d'entrée unique : `collecter()` → `enrichir()` → `marquer_recommandat
 
 ## 11. Prochaine étape
 
-**Epic 1 est entièrement terminé** (Stories 1.1 à 1.9, toutes `done`) : le pipeline complet existe, de la collecte à la double publication (page + archive), à l'échelle réduite visée (3-5 sources). Reste à trancher **quel Epic attaquer ensuite** — décision d'Abdoulaye, pas encore prise :
+**Epic 1 est entièrement terminé** (Stories 1.1 à 1.9, toutes `done`) : le pipeline complet existe, de la collecte à la double publication (page + archive), à l'échelle réduite visée (3-5 sources). **Epic 2 est démarré** : Story 2.1 (`done`) porte le socle à 17 sources et ferme la dette `pour_le_metier`. Reste à faire dans l'Epic 2, dans l'ordre des epics.md :
 
-- **Epic 2 — Socle élargi (15-20 sources) et robustesse aux pannes.** Comble une lacune déjà identifiée (le registre `pour_le_metier` est structurellement vide, aucune source ne le déclare) et ajoute la résilience (timeout réseau, retry/backoff, distinction 404 vs flux malformé) avant d'élargir le volume — probablement le prérequis le plus naturel avant une exécution nocturne sans supervision (Epic 3).
-- **Epic 3 — Génération nocturne automatique.** Rend le pipeline réellement autonome (ordonnancement, idempotence du job, état « déjà vu » validé après publication) — le bénéfice le plus visible au quotidien (Abdoulaye n'a plus rien à déclencher), mais suppose `store.py`/SQLite (AD-5) encore à construire.
+- **Story 2.2 — Continuer en panne.** Renforcer l'isolation de panne déjà existante (AD-6) face aux nouveaux modes d'échec qu'un socle à 17 sources expose davantage (timeout réseau absent sur `feedparser`, distinction 404 vs flux malformé — dette suivie depuis la Story 1.1).
+- **Story 2.3 — Respecter le débit/backoff.** Retry/backoff sur 429/5xx, pertinent dès qu'une source comme Hacker News (Algolia) ou GitHub est interrogée nuit après nuit.
+- **Story 2.4 — Dédoublonner à l'échelle.** `dedup.py` a été conçu et testé pour 4 sources ; vérifier son comportement (performance, transitivité) à 17 sources et plus.
+- **Epic 3 — Génération nocturne automatique.** Rend le pipeline réellement autonome (ordonnancement, idempotence du job, état « déjà vu » validé après publication) — le bénéfice le plus visible au quotidien (Abdoulaye n'a plus rien à déclencher), mais suppose `store.py`/SQLite (AD-5) encore à construire. Prérequis aussi pour évaluer sur plusieurs nuits deux incertitudes trouvées en Story 2.1 (rendement réel de `pour_le_metier`, réglage du seuil Hacker News).
 - **Epic 4 — Santé des sources et découverte.** Le moins urgent tant que le socle reste petit et géré manuellement.
 
 **Avant l'un ou l'autre, ou en parallèle** : créer le second dépôt GitHub public de sortie et y activer GitHub Pages (+ `.nojekyll`) — seule chose qui manque pour valider `publish.py` (page et archive) contre l'API réelle plutôt qu'en dégradation simulée. Et dès qu'une clé `ANTHROPIC_API_KEY` sera fournie : valider `enrich/llm.py` contre l'API véritable (langue, longueur, coût mesuré) — déjà branché dans un run réel depuis la Story 1.8, seule la validation manque.
@@ -500,3 +536,4 @@ Point d'entrée unique : `collecter()` → `enrichir()` → `marquer_recommandat
 Autres points ouverts (§7, §8), non liés à un Epic en particulier :
 - `Score.motifs` (`filter.py`) existe toujours et n'est consommé par rien — resterait disponible si un besoin d'affichage l'exigeait plus tard.
 - Le doublon de l'avertissement « registre inconnu » (`render.py`, Story 1.9) — bruit de log mineur, pas fonctionnel, non corrigé faute d'un correctif proportionné.
+- **`rss_connector._to_utc_datetime` mal-date silencieusement 5 des 17 sources du socle** (trouvé en Story 2.1, hors périmètre « sans modification de code » de cette story) — candidat naturel pour la Story 2.2, qui touche déjà à la robustesse des connecteurs.
