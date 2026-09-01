@@ -14,6 +14,21 @@
 #    0  agrégateur — relaie l'actualité d'autrui (défaut)
 # Le but : à annonce identique, garder la source d'origine plutôt que
 # celui qui la reprend.
+#
+# Piège trouvé en Story 2.1 : `0` ci-dessus n'est en pratique jamais
+# assignable à une vraie source. `SourceConfig.priorite` vaut `0` par défaut
+# (config.py) — un `0` explicite et une priorité simplement absente sont donc
+# indiscernables une fois le YAML chargé, et un garde-fou de
+# `test_socle_reel.py` (`test_chaque_source_declare_une_priorite`) rejette
+# tout `0`, explicite ou non. Pour un agrégateur, utiliser `1` (la valeur
+# explicite la plus basse) plutôt que `0` — voir `hacker-news` ci-dessous.
+#
+# Piège JSON trouvé en Story 2.1 : si la racine de la réponse n'est pas
+# elle-même une liste (ex. `{"hits": [...]}` plutôt que `[...]`), déclarer
+# `racine: <clé>` (ex. `racine: hits`) — sans quoi `json_connector` ignore
+# silencieusement toute la source (aucune exception, juste 0 item). Voir
+# `hacker-news` ci-dessous ; `hf-daily-papers` n'en a pas besoin, sa réponse
+# est déjà une liste à la racine.
 
 sources:
   # --- Flux RSS/Atom -------------------------------------------------------
@@ -64,3 +79,145 @@ sources:
     registre: ce_qui_bouge
     selecteur: /news/
     base_url: https://www.anthropic.com
+
+  # ==========================================================================
+  # Story 2.1 — extension du socle à 15-20 sources (PRD §6.1, addendum du
+  # brief). Chaque URL ci-dessous a été vérifiée par requête HTTP réelle
+  # (HTTP 200) avant d'être ajoutée ici — jamais reprise telle quelle de la
+  # documentation (une l'était : voir la note sur lemonde-informatique).
+  # ==========================================================================
+
+  # --- Apprendre (+8) -------------------------------------------------------
+  # Dépôts GitHub à fort signal (releases.atom) — 4 des ~10 cités par
+  # l'addendum, en entrées séparées plutôt qu'un « panier » à 1 source :
+  # regrouper plusieurs flux sous un seul id demanderait un connecteur
+  # multi-URL, hors périmètre « sans modification de code » (Dev Notes).
+  - id: github-llamacpp
+    priorite: 10
+    type: rss
+    url: https://github.com/ggml-org/llama.cpp/releases.atom
+    langue: en
+    registre: apprendre
+
+  - id: github-vllm
+    priorite: 10
+    type: rss
+    url: https://github.com/vllm-project/vllm/releases.atom
+    langue: en
+    registre: apprendre
+
+  - id: github-transformers
+    priorite: 10
+    type: rss
+    url: https://github.com/huggingface/transformers/releases.atom
+    langue: en
+    registre: apprendre
+
+  - id: github-ollama
+    priorite: 10
+    type: rss
+    url: https://github.com/ollama/ollama/releases.atom
+    langue: en
+    registre: apprendre
+
+  - id: eugene-yan
+    priorite: 10
+    type: rss
+    url: https://eugeneyan.com/rss/
+    langue: en
+    registre: apprendre
+
+  - id: simon-willison
+    priorite: 10
+    type: rss
+    # /entries/ et non /everything/ (piège documenté par l'addendum) :
+    # /everything/ mélange des types de contenu hors articles de fond.
+    url: https://simonwillison.net/atom/entries/
+    langue: en
+    registre: apprendre
+
+  - id: statquest-youtube
+    priorite: 10
+    type: rss
+    url: https://www.youtube.com/feeds/videos.xml?channel_id=UCtYLUTtgS3k1Fg4y5tAhLbw
+    langue: en
+    registre: apprendre
+
+  - id: datagen-podcast
+    priorite: 10
+    type: rss
+    # Expose l'intégralité de l'archive (~312 épisodes) à chaque requête, pas
+    # seulement les récents — amplifie une limitation déjà connue (pas d'état
+    # « déjà vu » persistant avant l'Epic 3), sans rien casser aujourd'hui
+    # (filtrage/quotas s'appliquent normalement). Voir Dev Notes de la story.
+    url: https://feeds.acast.com/public/shows/5fa58959e64011214fbf140d
+    langue: fr
+    registre: apprendre
+
+  # --- Ce qui bouge (+3) -----------------------------------------------------
+  - id: brief-ia
+    priorite: 5
+    type: rss
+    url: https://www.briefia.fr/rss.xml
+    langue: fr
+    registre: ce_qui_bouge
+
+  - id: hacker-news
+    # Sémantiquement un agrégateur (priorité 0 selon l'échelle ci-dessus),
+    # mais test_chaque_source_declare_une_priorite (garde-fou existant, non
+    # modifié — AC5) interdit toute priorité à 0 : le modèle ne distingue pas
+    # une priorité explicitement à 0 d'une priorité simplement absente. 1 est
+    # donc la valeur la plus basse explicite possible, sous les curations (5).
+    priorite: 1
+    type: json
+    # Pré-filtre large côté API (points>100) ; le seuil éditorial réel
+    # (points>250, ~5 items/jour mesuré par l'addendum) vit dans
+    # seuil_signal, pas dans l'URL — même patron que hf-daily-papers.
+    url: https://hn.algolia.com/api/v1/search_by_date?tags=story&numericFilters=points%3E100
+    langue: en
+    registre: ce_qui_bouge
+    # La réponse Algolia est un objet {"hits": [...], ...}, pas une liste à la
+    # racine (contrairement à hf-daily-papers). Sans cette clé, json_connector
+    # cherche une liste à la racine, n'en trouve pas et ignore la source
+    # entière (trouvé en exécution réelle, Task 4 — voir Completion Notes).
+    racine: hits
+    seuil_signal: 250
+    mapping:
+      guid: objectID
+      titre: title
+      date_publication: created_at
+      url: url
+      signal: points
+
+  - id: tldr-ai
+    priorite: 5
+    type: rss
+    url: https://tldr.tech/api/rss/ai
+    langue: en
+    registre: ce_qui_bouge
+
+  # --- Pour le métier (+2) ---------------------------------------------------
+  # Registre structurellement vide depuis la Story 1.5 (trouvé en revue,
+  # reconduit dans deferred-work.md à chaque story depuis) — fermé ici.
+  - id: decideo
+    priorite: 10
+    type: rss
+    url: https://www.decideo.fr/xml/syndication.rss
+    langue: fr
+    registre: pour_le_metier
+
+  - id: lemonde-informatique
+    priorite: 10
+    type: rss
+    # URL corrigée (Story 2.1) : le flux thématique IA de l'addendum
+    # (.../thematique/intelligence-artificielle/rss.xml) répond 404 en
+    # réalité — remplacé par le flux général, vérifié fonctionnel (RSS
+    # 1.0/RDF, toléré par feedparser comme tout flux « bozo » exploitable).
+    # URL canonique (revue de la Story 2.1) : .../rss/rss.xml répond 301 vers
+    # .../flux-rss/rss.xml — pointer directement sur la destination plutôt
+    # que sur une redirection (contenu identique, `feedparser`/`httpx` la
+    # suivent de toute façon, mais autant ne pas dépendre que l'éditeur la
+    # maintienne).
+    url: https://www.lemondeinformatique.fr/flux-rss/rss.xml
+    langue: fr
+    registre: pour_le_metier

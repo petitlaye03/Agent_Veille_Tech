@@ -176,3 +176,17 @@ def test_un_mapping_signal_s_accompagne_d_un_seuil(socle):
             f"{source.id} : 'mapping.signal' déclaré sans seuil_signal — "
             "le signal est extrait puis ignoré"
         )
+
+
+def test_le_socle_couvre_le_registre_pour_le_metier(socle):
+    """Registre structurellement vide depuis la Story 1.5 (trouvé en revue,
+    reconduit dans deferred-work.md à chaque story depuis) — Story 2.1 ferme
+    cette dette. Sans ce garde-fou, une édition future de sources.yaml
+    pourrait le revider silencieusement (aucun autre test ne couvre un
+    registre précis, seulement l'ensemble des registres valides)."""
+    pour_le_metier = [s.id for s in socle if s.registre == "pour_le_metier"]
+
+    assert pour_le_metier, (
+        "aucune source ne déclare 'registre: pour_le_metier' — la dette "
+        "rouverte, ce registre resterait vide dans tout digest produit"
+    )
