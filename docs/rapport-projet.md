@@ -8,9 +8,9 @@
 > code, pas un instantané figé. La §10 (Référence technique) en particulier
 > doit être corrigée dès qu'un fichier qu'elle décrit change de comportement.
 >
-> **Dernière mise à jour :** 2026-09-01, fin de la Story 2.1 (dev + revue).
-> **Story courante :** aucune (2.1 terminée, `done` — **Epic 2 démarré**, 1/4 stories faites).
-> **Prochaine étape :** Story 2.2 (continuer en panne) — voir §11.
+> **Dernière mise à jour :** 2026-09-02, fin de la Story 2.2 (dev + revue).
+> **Story courante :** aucune (2.2 terminée, `done` — **Epic 2**, 2/4 stories faites).
+> **Prochaine étape :** Story 2.3 (respecter les sources sensibles au débit) — voir §11.
 
 ---
 
@@ -59,7 +59,7 @@ Document de référence : [ARCHITECTURE-SPINE.md](../_bmad-output/planning-artif
 | AD-3 | Sources et Profil en configuration, jamais en dur | ✅ `sources.yaml`, `profil.md`, `scoring.yaml`, `quotas.yaml` |
 | AD-4 | `Item` = forme interne canonique | ✅ 9 champs depuis l'amendement du 2026-08-27 (ajout de `signal`, voir §7.6) |
 | AD-5 | SQLite, propriétaire unique de l'état | ⏳ Pas encore construit — prévu quand une story en aura réellement besoin (dédup cross-nuit Story 3.4, santé des sources Epic 4) |
-| AD-6 | Isolation des pannes par source, jamais d'exception qui interrompt le run | ✅ Éprouvé en conditions réelles (Story 1.2) et durci à plusieurs reprises en revue |
+| AD-6 | Isolation des pannes par source, jamais d'exception qui interrompt le run | ✅ Éprouvé en conditions réelles (Story 1.2) et durci à plusieurs reprises en revue. **Depuis la Story 2.2**, `rss_connector.py` applique enfin un timeout réseau explicite (dernier des 3 connecteurs à en manquer) et une panne HTTP y devient une vraie `échec`, plus une source « muette » indiscernable — et une nuit à >50 % de sources en panne réseau/HTTP est désormais détectée et journalisée (`ResultatCollecte.anomalie_pannes`) |
 | AD-7 | Frontière LLM unique (`enrich.llm`, Claude Haiku) | ✅ Construit (Story 1.6, FR-7 : accroches) et étendu (Story 1.7, FR-8 : recommandation) — `enrich/llm.py`, seul point d'appel API vérifié mécaniquement (`grep`). **Branché dans un run réel depuis la Story 1.8** (`pipeline.py`), mais toujours pas validé contre l'API véritable (aucune clé fournie) — voir §8 |
 | AD-8 | Publication par commit git vers GitHub Pages | 🟡 Construit (Story 1.8 : page HTML ; Story 1.9 : archive Markdown datée) — `publish.py`, via l'API Contents GitHub vers un **second dépôt public dédié** (variante explicitement anticipée par le Structural Seed, le dépôt de code reste privé). Page et archive partagent le même dépôt, comme l'exige la règle. Testé et validé en dégradation (sans jeton), **pas encore validé contre l'API réelle** : le dépôt de sortie n'a pas encore été créé (action réelle sous le compte d'Abdoulaye, différée) — voir §8, §9 |
 | AD-9 | Idempotence du job nocturne (upsert par date) | 🟡 Le mécanisme d'upsert existe et est exercé (Story 1.9) — `publier_archive` écrase l'archive existante d'une même date via son `sha` plutôt que d'en créer une seconde. L'ordonnancement nocturne lui-même (déclencheur, reprise après échec) reste Epic 3 |
@@ -84,7 +84,7 @@ Projet mené en méthode **BMAD** : brief → PRD → architecture → epics/sto
 | Epic | Contenu | État |
 |---|---|---|
 | **Epic 1** | Un premier digest, réel, bout en bout (3-5 sources) | ✅ **Terminé** — Stories 1.1-1.9 toutes `done` |
-| **Epic 2** | Socle élargi (15-20 sources) et robustesse aux pannes | 🟡 En cours — Story 2.1 `done`, 2.2/2.3/2.4 à faire |
+| **Epic 2** | Socle élargi (15-20 sources) et robustesse aux pannes | 🟡 En cours — Stories 2.1/2.2 `done`, 2.3/2.4 à faire |
 | **Epic 3** | Génération nocturne automatique | ⏳ Pas commencé |
 | **Epic 4** | Santé des sources et découverte de nouvelles sources | ⏳ Pas commencé |
 
@@ -109,8 +109,9 @@ Projet mené en méthode **BMAD** : brief → PRD → architecture → epics/sto
 | Story | Titre | Statut | Tests |
 |---|---|---|---|
 | 2.1 | Étendre le socle aux 15-20 sources visées | ✅ `done` | 323 → **324** |
+| 2.2 | Continuer à fonctionner quand une source tombe en panne | ✅ `done` | 324 → **335** |
 
-**Total tests actuel : 324, tous verts** (`uv run pytest`).
+**Total tests actuel : 335, tous verts** (`uv run pytest`).
 
 ## 6. Ce qui est livré, story par story
 
@@ -228,6 +229,16 @@ Première story de l'Epic 2. Pure extension de configuration : `config/sources.y
 
 4 correctifs, 1 report (le bug `updated_parsed`, déjà tracé), 2 rejets — dont la critique sur la priorité uniforme des 4 dépôts GitHub (déjà actée comme délibérée dans les Dev Notes). 323 → 324 tests. Détail complet : [2-1-etendre-le-socle.md](../_bmad-output/implementation-artifacts/2-1-etendre-le-socle.md).
 
+### 6.11 — Story 2.2 : continuer à fonctionner quand une source tombe en panne
+
+`rss_connector.py` était le seul des trois connecteurs sans timeout réseau explicite (dette suivie depuis la Story 1.1) : `feedparser.parse(url)` faisait sa propre récupération HTTP en interne, sans limite de temps, et une panne HTTP (403/429/500) était avalée dans le mécanisme `bozo` plutôt que remontée comme un échec — la source apparaissait « MUETTE » (zéro item, sans erreur), indiscernable d'un flux simplement vide. Cette story ajoute une fonction `_charger()` qui récupère elle-même le flux via `httpx` (`TIMEOUT_SECONDES = 30`, `raise_for_status()`, `User-Agent` explicite — même patron que `json_connector.py`/`scrape_connector.py`, sauf que la condition de branchement est nécessairement inversée) pour toute URL réseau, et passe le contenu récupéré à `feedparser.parse()` plutôt que l'URL elle-même. Le chemin local (chemins bruts, utilisés par tous les tests) reste strictement inchangé. Ferme au passage une seconde dette de la Story 1.1 (aucun `User-Agent` explicite envoyé).
+
+**Nouveau signal (FR-2, AC4)** : `ResultatCollecte.taux_echec`/`anomalie_pannes` détectent une nuit où plus de la moitié des sources échouent par panne réseau/HTTP réelle (seuil strict, égalité à 50 % exclue) — `_journaliser` émet alors un journal `ERROR` agrégé nommant les sources concernées, sans jamais empêcher la production du digest. Portée délibérément limitée au journal (pas de bandeau sur la page publiée, qui suppose un état persistant — Epic 3, déjà tracé depuis la revue de la Story 1.8).
+
+**Revue de code (Sonnet 5)** — 3 constats trouvés indépendamment par plusieurs couches, tous corrigés : le dispatch réseau/local de `_charger` utilisait `str.startswith` (sensible à la casse) plutôt que `urlparse(...).scheme` comme `scrape_connector.py` — un schéma `HTTP://` aurait silencieusement réintroduit la panne que cette story ferme ; `taux_echec` comptait une source au `type` mal orthographié (faute de configuration statique) comme une panne réseau, ce qui aurait pu déclencher à tort l'anomalie ; le journal `ERROR` d'anomalie ne nommait pas les sources concernées. Deux corrections de précision documentaire (le nouveau journal n'est pas le premier signal `ERROR` — chaque panne par source l'était déjà, juste noyée dans le détail — et le « patron » repris des deux autres connecteurs a une condition de branchement inversée par nécessité). Deux tests ajoutés pour combler des trous de couverture trouvés en revue : deux sources RSS dans le même run (une en panne, une vivante — jusque-là seulement testé RSS+JSON), et un test d'encodage reproductible (en-tête `Content-Type` menteur) remplaçant une vérification manuelle qui ne comparait que le nombre d'items, pas le contenu décodé.
+
+7 correctifs, 1 report (redirections HTTP non plafonnées — motif préexistant aux 3 connecteurs, pas introduit ici), 6 rejets — dont le choix délibéré de ne pas compter les sources « muettes » dans l'anomalie (déjà explicite dans l'AC4) et la séquentialité du run (hors périmètre, Story 2.3). 324 → 335 tests. Détail complet : [2-2-continuer-en-panne.md](../_bmad-output/implementation-artifacts/2-2-continuer-en-panne.md).
+
 ## 7. Journal des décisions structurantes (cumulatif)
 
 Ce journal ne répète pas le détail des stories (§6) ; il ne garde que ce qui **contraint les stories suivantes**.
@@ -264,14 +275,23 @@ Ce journal ne répète pas le détail des stories (§6) ; il ne garde que ce qui
 30. **Un défaut par dataclass rend une valeur explicite indiscernable d'une valeur absente** — `SourceConfig.priorite: int = 0` fait qu'un `0` écrit à dessein dans `sources.yaml` et un champ simplement omis produisent le même objet chargé ; un garde-fou qui interdit « 0 » ne peut donc interdire que les deux à la fois, jamais l'un sans l'autre. Une échelle de configuration documentée (ici : « 0 = agrégateur ») doit être vérifiée contre les garde-fous existants avant d'être utilisée telle quelle — pas seulement contre le schéma du type (Story 2.1).
 31. **Vérifier une URL par requête réelle doit inclure le premier code de statut, pas seulement la destination finale après redirection** — `curl`/`httpx`/`feedparser` suivent les redirections par défaut, donc une vérification qui ne regarde que le contenu final peut affirmer « HTTP 200 confirmé » pour une URL qui répond en réalité 301. Sans conséquence fonctionnelle ici (les clients de ce projet suivent tous les redirections), mais l'affirmation elle-même était imprécise — et la config doit pointer sur la destination canonique, pas sur un alias qui dépend de la bonne volonté continue de l'éditeur à le maintenir (Story 2.1, trouvé indépendamment par 2 des 3 couches de revue).
 32. **Un connecteur générique qui suppose une forme de réponse par défaut doit voir cette hypothèse documentée à l'endroit où elle se vérifie, pas seulement dans le code** — `json_connector.fetch` suppose une liste à la racine sauf si `racine` est déclaré ; l'absence de ce champ ne lève aucune exception, seulement un avertissement et une source silencieusement vide (0 item, sans échec visible ailleurs qu'un log). Trouvé uniquement par l'exécution réelle de Task 4, pas par la configuration déclarée ni par un test unitaire — confirme la leçon #14 (vérifier deux fois, en conditions réelles) pour la configuration autant que pour le code (Story 2.1).
+33. **Reproduire un patron d'un module sœur exige de vérifier la condition de branchement, pas seulement l'intention** — `rss_connector._charger` reprend l'esprit de `json_connector._charger`/`scrape_connector._charger` (dispatch réseau/local, timeout explicite), mais avec une condition inversée (`http(s)://` → réseau, plutôt que `file://` → local), nécessaire parce que les tests RSS passent des chemins bruts sans schéma. Affirmer « même patron exact » aurait été trompeur — trouvé en revue, corrigé en documentant l'écart plutôt qu'en le masquant (Story 2.2).
+34. **Une nuance de casse ou de format dans une comparaison de schéma d'URL peut rouvrir silencieusement un trou déjà fermé** — `str.startswith(("http://", "https://"))` est sensible à la casse et à un espace de tête, contrairement à `urlparse(...).scheme` (déjà utilisé par `scrape_connector._collecte_autorisee`) qui normalise les deux. Un `HTTP://` littéral aurait fait retomber une source réseau sur la branche « locale », réintroduisant pour cette URL l'absence de timeout que la story visait justement à corriger (Story 2.2, trouvé en revue).
+35. **Un taux d'anomalie agrégé doit filtrer les causes qu'il ne doit pas compter, pas seulement réutiliser un compteur existant tel quel** — `anomalie_pannes` (Story 2.2) réutilisait d'abord `sources_en_echec` tel quel, qui inclut aussi bien une vraie panne réseau/HTTP qu'une source dont le `type` est mal orthographié (jamais tentée par un connecteur). Une réutilisation directe aurait laissé une simple faute de frappe de configuration se faire passer pour une nuit de panne réseau — corrigé par un filtre explicite (`type in CONNECTORS`) avant de calculer le taux (Story 2.2, trouvé en revue).
+36. **Une vérification réelle qui ne compare que des comptes (nombre d'items, de lignes) peut manquer une régression de contenu** — la vérification réseau de la Story 2.2 (avant/après le passage à `httpx`) confirmait le même nombre d'items sur 3 sources réelles, mais n'aurait pas détecté un mauvais décodage silencieux qui préserve le compte (accents corrompus). Un test automatisé et reproductible (en-tête `Content-Type` menteur simulé) verrouille désormais le **contenu** décodé, pas seulement le compte — leçon complémentaire à la #14, qui portait sur la fraîcheur de la vérification, pas sur ce qu'elle mesure réellement (Story 2.2, trouvé en revue).
 
 ## 8. Dette technique et travail reporté
 
 Liste vivante complète : [deferred-work.md](../_bmad-output/implementation-artifacts/deferred-work.md). Résumé de ce qui reste ouvert, par destination :
 
-**Epic 2 (socle élargi, robustesse)** — timeout réseau sur `feedparser`/`httpx`, distinction 404 vs flux malformé, retry/backoff sur 429/5xx, plafond de taille des réponses HTTP, mode d'extraction « carte » pour le scraping (titre/date en frères de l'ancre, pas en descendants — bloque l'ajout de la plupart des blogs WordPress), en-têtes/authentification pour les API JSON (bloque Kaggle, prévu au socle v1 mais toujours pas construit — la Story 2.1 a explicitement laissé Kaggle de côté pour cette raison), `url_modele` limité à `{guid}`.
+**Epic 2 (socle élargi, robustesse)** — distinction 404 vs flux malformé, retry/backoff sur 429/5xx, plafond de taille des réponses HTTP, mode d'extraction « carte » pour le scraping (titre/date en frères de l'ancre, pas en descendants — bloque l'ajout de la plupart des blogs WordPress), en-têtes/authentification pour les API JSON (bloque Kaggle, prévu au socle v1 mais toujours pas construit — la Story 2.1 a explicitement laissé Kaggle de côté pour cette raison), `url_modele` limité à `{guid}`.
 
 **Dette fermée en Story 2.1** : ~~`config/sources.yaml` ne déclare aucune source en registre `pour_le_metier`~~ — 2 sources ajoutées (`decideo`, `lemonde-informatique`), la 3ᵉ section du digest reçoit désormais des items réels.
+
+**Dette fermée en Story 2.2** : ~~timeout réseau absent sur `feedparser`/`rss_connector.py`~~ — `TIMEOUT_SECONDES = 30` + `User-Agent` explicite ajoutés (même patron que les deux autres connecteurs) ; ~~une panne HTTP sur une source RSS est avalée par `bozo`, remonte comme « muette » plutôt qu'« échec »~~ — corrigé, `RapportSource.echec` porte désormais la vraie cause.
+
+**Trouvé en Story 2.2, reporté** :
+- **`httpx.get(..., follow_redirects=True)` n'impose aucune limite au nombre/à la durée totale des sauts de redirection**, sur les trois connecteurs (`json_connector.py`, `scrape_connector.py`, `rss_connector.py` depuis cette story). Le `timeout` de 30s borne chaque opération réseau, pas la chaîne complète de redirections d'une même source — atténue partiellement l'objectif « ne doit plus pouvoir bloquer indéfiniment ». Motif préexistant aux 3 connecteurs, pas introduit par cette story.
 
 **Trouvé en Story 2.1, reporté** :
 - **`rss_connector._to_utc_datetime` ne retombe jamais sur `updated_parsed` quand `published_parsed` est absent** — mal-date silencieusement, en permanence (pas seulement une nuit), les items des flux Atom purs et RDF (4 dépôts GitHub + Le Monde Informatique, 5/17 sources du socle actuel). Sans conséquence de justesse aujourd'hui (tri par score, pas par fraîcheur), mais consequential dès qu'une logique s'appuiera sur la date réelle (état « déjà vu » de l'Epic 3). Hors périmètre de la Story 2.1 (« sans modification de code ») — correctif proposé : replier sur `entry.get("updated_parsed")` avant le retour par défaut à `datetime.now()`.
@@ -280,7 +300,7 @@ Liste vivante complète : [deferred-work.md](../_bmad-output/implementation-arti
 - **OpenRouter (signal marché, addendum) n'a pas été ajouté** — ne nécessite aucune authentification, mais sa valeur documentée (diff quotidien des `id` de modèles) suppose un état persistant jour-sur-jour que ce projet n'a pas encore (`store.py`/SQLite, Epic 3). Collecter sans diffing produirait du bruit, pas du signal.
 - **`datagen-podcast` (312 entrées) et `eugene-yan` (212 entrées) renvoient l'intégralité de leur archive à chaque run**, pas seulement les récents — amplifie la limitation déjà connue (pas d'état « déjà vu » persistant) : les mêmes anciens contenus peuvent ressortir bien classés plusieurs nuits de suite une fois le pipeline nocturne actif.
 
-**Epic 3 (nocturne automatique)** — délai d'attente global sur `feedparser` ; ordonnancement (Planificateur de tâches, FR-11) ; un bandeau d'échec nocturne sur la page publiée suppose un état de run persistant que `store.py`/SQLite (AD-5) ne fournit pas encore — trouvé en revue de la Story 1.8, le pipeline peut aujourd'hui publier un « rien à signaler » aussi bien pour une nuit calme que pour une collecte réellement en panne, sans les distinguer ; le chaînage interne de `collecter()` (collecte+dédup+filtre+quotas en une seule fonction, tension AD-1 non entièrement résolue par la Story 1.8, voir §7#24) pourrait être éclaté à cette occasion si un besoin réel apparaît ; `rendre()`/`rendre_markdown()` journalisent chacun indépendamment un éventuel « registre inconnu » via leur propre appel à `_grouper_par_registre` — un même run le journalise donc deux fois (trouvé en revue de la Story 1.9, non corrigé : un correctif propre exigerait de changer la signature publique des deux fonctions pour leur passer un regroupement déjà calculé, ou introduirait un drapeau persistant qui supprimerait à tort un avertissement réellement nouveau plus tard).
+**Epic 3 (nocturne automatique)** — budget de temps global pour l'ensemble de la collecte (chaque source a désormais son propre timeout depuis la Story 2.2, mais rien ne borne la durée totale d'un run avec plusieurs sources lentes — la boucle de `collect.py` reste séquentielle) ; ordonnancement (Planificateur de tâches, FR-11) ; un bandeau d'échec nocturne sur la page publiée suppose un état de run persistant que `store.py`/SQLite (AD-5) ne fournit pas encore — trouvé en revue de la Story 1.8, le pipeline peut aujourd'hui publier un « rien à signaler » aussi bien pour une nuit calme que pour une collecte réellement en panne, sans les distinguer ; le chaînage interne de `collecter()` (collecte+dédup+filtre+quotas en une seule fonction, tension AD-1 non entièrement résolue par la Story 1.8, voir §7#24) pourrait être éclaté à cette occasion si un besoin réel apparaît ; `rendre()`/`rendre_markdown()` journalisent chacun indépendamment un éventuel « registre inconnu » via leur propre appel à `_grouper_par_registre` — un même run le journalise donc deux fois (trouvé en revue de la Story 1.9, non corrigé : un correctif propre exigerait de changer la signature publique des deux fonctions pour leur passer un regroupement déjà calculé, ou introduirait un drapeau persistant qui supprimerait à tort un avertissement réellement nouveau plus tard).
 
 **Epic 4 (santé des sources)** — distinction diagnostique fine des échecs, racine JSON vide non signalée, bornes de plausibilité sur les dates aberrantes.
 
@@ -298,7 +318,7 @@ Liste vivante complète : [deferred-work.md](../_bmad-output/implementation-arti
 - le `.git` était resté à la racine de `Projets_Perso/` (englobant à tort `Saas_chatbots/`, un projet distinct) — déplacé dans `Agent_veille_tech/.git` pour que ce dossier soit son propre dépôt, aligné sur le remote `petitlaye03/Agent_Veille_Tech` ;
 - `.venv` était un venv Windows inutilisable (`home = C:\Program Files\Python311`) — supprimé et reconstruit avec `uv sync` (`uv` installé via Homebrew, absent du Mac).
 
-**État actuel** : dépôt propre (Stories 1.4 à 1.9 committées et poussées — Epic 1 entièrement terminé ; Story 2.1 committée et poussée — Epic 2 démarré). Aucun commit n'est fait automatiquement — décision du 2026-08-27 : les commits restent à la demande explicite d'Abdoulaye. Les dossiers `_bmad/`, `.claude/`, `_bmad-output/` sont suivis par git depuis le 2026-08-28 (réintégrés une fois le dépôt confirmé privé et le contenu relu — voir commit dédié entre les Stories 1.7 et 1.8).
+**État actuel** : dépôt propre (Stories 1.4 à 1.9 committées et poussées — Epic 1 entièrement terminé ; Stories 2.1/2.2 committées et poussées — Epic 2 en cours). Aucun commit n'est fait automatiquement — décision du 2026-08-27 : les commits restent à la demande explicite d'Abdoulaye. Les dossiers `_bmad/`, `.claude/`, `_bmad-output/` sont suivis par git depuis le 2026-08-28 (réintégrés une fois le dépôt confirmé privé et le contenu relu — voir commit dédié entre les Stories 1.7 et 1.8).
 
 **Secrets** : `ANTHROPIC_API_KEY` (`.env`, voir `.env.example`) — nécessaire pour que `enrich/llm.py` génère de vraies accroches. Aucune clé fournie à ce jour. `GITHUB_TOKEN` (Story 1.8, optionnel) — `publish.py` réutilise en repli la session `gh` déjà authentifiée localement (`gh auth token`) si cette variable est absente.
 
@@ -378,10 +398,11 @@ C'est le **seul** point de couplage entre la collecte et tout ce qui suit : aucu
 Les trois connecteurs partagent le contrat `fetch(source_config: SourceConfig) -> list[Item]` (AD-2). Aucun autre module n'a besoin de savoir lequel est utilisé — `collect.CONNECTORS` fait le dispatch.
 
 **`rss_connector.py`** — flux RSS/Atom via `feedparser`.
+- `_charger(url)` (Story 2.2) : dispatch sur `urlparse(url).scheme` — `http(s)://` récupère le flux via `httpx` (`TIMEOUT_SECONDES = 30`, `raise_for_status()`, `User-Agent` explicite), tout le reste (chemin local, `file://`) est rendu tel quel à `feedparser.parse()`, inchangé depuis la Story 1.1. Une panne HTTP (403/429/500) ou un délai dépassé lève désormais une vraie exception, capturée par l'isolation de `collect._fetch_one` (AD-6) — avant la Story 2.2, elle était avalée par le mécanisme `bozo` et la source apparaissait « muette » plutôt qu'« en échec ». Condition de branchement délibérément inversée par rapport à `json_connector._charger`/`scrape_connector._charger` ci-dessous (voir §7#33).
 - Tolère un flux `bozo` (imparfait) tant qu'il expose des entrées exploitables ; ne renvoie une liste vide que si aucune entrée n'est récupérable.
 - `guid` : identifiant natif du flux en priorité, puis URL, puis hash SHA-256 `(source_id + titre)` — convention posée en Story 1.1.
 - `_extract_contenu` : repli en cascade `summary` → `content[0].value` (Atom) → `description`, pour ne jamais renvoyer un contenu vide alors que le flux en porte.
-- Dates converties via `calendar.timegm` (pas `time.mktime`, qui appliquerait le fuseau local).
+- Dates converties via `calendar.timegm` (pas `time.mktime`, qui appliquerait le fuseau local). Encore affecté par le bug `published_parsed`/`updated_parsed` trouvé en Story 2.1 (dette, §8).
 - Isolation par entrée : une entrée corrompue n'emporte pas les autres.
 
 **`json_connector.py`** — API JSON, forme entièrement déclarée en configuration (`mapping`, chemins pointés type `paper.summary`).
@@ -434,10 +455,10 @@ Utilitaires partagés entre les trois mécanismes : `_ventilation(comptes)` (for
 
 - **`CONNECTORS`** — table de dispatch `type → fetch`, seul point à modifier pour ajouter un connecteur.
 - **`RapportSource`** — par source : `nb_items` (collecté) vs `nb_retenus` (contribution finale au digest, agrégeant dédoublonnage + seuil de signal + scoring + quotas). `est_muette` (zéro item sans erreur) et `est_absorbee` (a collecté mais rien n'a survécu) sont des diagnostics distincts d'`echec` (une vraie erreur).
-- **`ResultatCollecte`** — `items` (liste finale), un rapport par mécanisme (`dedoublonnage`, `filtrage_signal`, `classement`, `quotas`), `profil_neutre` (alerte si le profil n'a aucun mot-clé), et depuis la Story 1.8 **`resultats_repartis: list[ItemScore]`** — le classement filtré par quota exposé tel quel (champ additif, peuplé avec la variable déjà calculée en interne). Ferme la dette « `Score` calculé puis jeté » suivie depuis la Story 1.4 : sans ce champ, `pipeline.py` n'aurait eu aucun moyen de fournir un classement à `enrich.llm.marquer_recommandation`. `resume()` produit un récapitulatif texte auto-suffisant : total collecté vs retenu dès qu'ils diffèrent, détail de chaque mécanisme qui a écarté quelque chose.
+- **`ResultatCollecte`** — `items` (liste finale), un rapport par mécanisme (`dedoublonnage`, `filtrage_signal`, `classement`, `quotas`), `profil_neutre` (alerte si le profil n'a aucun mot-clé), et depuis la Story 1.8 **`resultats_repartis: list[ItemScore]`** — le classement filtré par quota exposé tel quel (champ additif, peuplé avec la variable déjà calculée en interne). Ferme la dette « `Score` calculé puis jeté » suivie depuis la Story 1.4 : sans ce champ, `pipeline.py` n'aurait eu aucun moyen de fournir un classement à `enrich.llm.marquer_recommandation`. `resume()` produit un récapitulatif texte auto-suffisant : total collecté vs retenu dès qu'ils diffèrent, détail de chaque mécanisme qui a écarté quelque chose. **Depuis la Story 2.2** : `sources_en_panne_reseau` (propriété) filtre `sources_en_echec` sur `type in CONNECTORS` — exclut une source dont le `type` est mal orthographié (jamais tentée par un connecteur, erreur de configuration statique, pas une panne réseau) ; `taux_echec`/`anomalie_pannes` (propriétés calculées) détectent une nuit où plus de la moitié du socle est en panne réseau/HTTP réelle (seuil strict, > 0.5).
 - **`collecter(sources_path, profil_path, scoring_path, quotas_path)`** — la fonction centrale. Charge les sources (isolé, AD-6), collecte chaque source (`_fetch_one`, isolé par source), puis enchaîne signal → dédoublonnage → scoring → quotas dans cet ordre exact. Les 4 chemins de configuration sont résolus **à l'appel**, pas à l'import — ce qui permet à `tests/conftest.py` de les substituer sans toucher au code.
 - **`run(sources_path)`** — enveloppe fine : `collecter(...).items`, pour les appelants qui ne veulent que la liste.
-- **`_journaliser`** — publie le récapitulatif en `INFO` (réellement visible en prod), et pour chaque source absorbée, nomme **toutes** les causes possibles (doublons / seuil de signal / bruit du profil / quota dépassé) plutôt que d'en présumer une seule.
+- **`_journaliser`** — publie le récapitulatif en `INFO` (réellement visible en prod), et pour chaque source absorbée, nomme **toutes** les causes possibles (doublons / seuil de signal / bruit du profil / quota dépassé) plutôt que d'en présumer une seule. **Depuis la Story 2.2** : émet en plus un journal `ERROR` agrégé (nommant les sources concernées) quand `anomalie_pannes` est vrai — distinct des traces `logger.exception` déjà émises individuellement par `_fetch_one` (elles aussi en `ERROR`, mais noyées dans le détail d'une nuit chargée). Ne bloque jamais la production du digest.
 
 ### 10.9 `src/veille/enrich/llm.py` — frontière LLM unique (AD-7, FR-7/8)
 
@@ -499,14 +520,14 @@ Point d'entrée unique : `collecter()` → `enrichir()` → `marquer_recommandat
 
 ### 10.14 Tests
 
-324 tests, aucun appel réseau ni subprocess réel dans la suite automatisée (fixtures locales, clients simulés, résolution de jeton monkeypatchée) — seule Task 4 de la Story 2.1 a fait une exécution réelle ponctuelle, hors suite `pytest`, documentée dans son Dev Agent Record. `tests/conftest.py` neutralise `profil.md`/`scoring.yaml`/`quotas.yaml` par défaut pour tous les tests (fixture `autouse`), afin qu'aucun test ne dépende implicitement de la configuration de production.
+335 tests, aucun appel réseau ni subprocess réel dans la suite automatisée (fixtures locales, clients simulés, `httpx.get` monkeypatché, résolution de jeton monkeypatchée) — seules les Tasks 2/4 des Stories 2.1/2.2 ont fait des exécutions réelles ponctuelles, hors suite `pytest`, documentées dans leurs Dev Agent Record respectifs. `tests/conftest.py` neutralise `profil.md`/`scoring.yaml`/`quotas.yaml` par défaut pour tous les tests (fixture `autouse`), afin qu'aucun test ne dépende implicitement de la configuration de production.
 
 | Fichier | Périmètre | Tests |
 |---|---|---|
 | `test_models.py` | `Item`, `Entree` (dont `recommandee`), validation de `date_publication` | 9 |
 | `test_config.py` | `load_sources`, validation de `seuil_signal` | 11 |
 | `test_socle_reel.py` | Garde-fous sur les fichiers de config **réels** (`sources.yaml`, `scoring.yaml`, `quotas.yaml`) — +1 en Story 2.1 (présence du registre `pour_le_metier`) | 15 |
-| `test_rss_connector.py` | Connecteur RSS | 6 |
+| `test_rss_connector.py` | Connecteur RSS — timeout/statut HTTP explicites, dispatch réseau vs local, encodage (Story 2.2) | 12 |
 | `test_json_connector.py` | Connecteur JSON, extraction du signal | 8 |
 | `test_scrape_connector.py` | Connecteur scraping, `robots.txt` | 9 |
 | `test_dedup.py` | Dédoublonnage unitaire | 20 |
@@ -515,7 +536,7 @@ Point d'entrée unique : `collecter()` → `enrichir()` → `marquer_recommandat
 | `test_filter.py` | Signal, scoring, quotas, marge de recommandation — le plus gros fichier | 69 |
 | `test_llm.py` | Frontière LLM (client simulé, isolation par item) + recommandation (`determiner_recommandation`/`marquer_recommandation`) | 33 |
 | `test_collect.py` | `run()`, cas d'erreur de haut niveau, `resultats_repartis` | 10 |
-| `test_rapport_collecte.py` | Observabilité (`RapportSource`, états muette/échec) | 6 |
+| `test_rapport_collecte.py` | Observabilité (`RapportSource`, états muette/échec, anomalie de pannes réseau — Story 2.2) | 11 |
 | `test_collecte_integration.py` | **Chemin réel** config → `collecter()` → rapport, pour chaque mécanisme | 25 |
 | `test_render.py` | Rendu HTML + Markdown : sections, palette, dark mode, échappement (HTML et Markdown), schéma/chevrons d'URI, registre inconnu | 32 |
 | `test_publish.py` | Publication (page + archive) : résolution de jeton, création/mise à jour, isolation de panne, trace par catégorie | 19 |
@@ -523,9 +544,8 @@ Point d'entrée unique : `collecter()` → `enrichir()` → `marquer_recommandat
 
 ## 11. Prochaine étape
 
-**Epic 1 est entièrement terminé** (Stories 1.1 à 1.9, toutes `done`) : le pipeline complet existe, de la collecte à la double publication (page + archive), à l'échelle réduite visée (3-5 sources). **Epic 2 est démarré** : Story 2.1 (`done`) porte le socle à 17 sources et ferme la dette `pour_le_metier`. Reste à faire dans l'Epic 2, dans l'ordre des epics.md :
+**Epic 1 est entièrement terminé** (Stories 1.1 à 1.9, toutes `done`) : le pipeline complet existe, de la collecte à la double publication (page + archive), à l'échelle réduite visée (3-5 sources). **Epic 2 est en cours** : Story 2.1 (`done`) porte le socle à 17 sources et ferme la dette `pour_le_metier` ; Story 2.2 (`done`) ferme le timeout réseau manquant de `rss_connector.py` et détecte une nuit à majorité de pannes. Reste à faire dans l'Epic 2, dans l'ordre des epics.md :
 
-- **Story 2.2 — Continuer en panne.** Renforcer l'isolation de panne déjà existante (AD-6) face aux nouveaux modes d'échec qu'un socle à 17 sources expose davantage (timeout réseau absent sur `feedparser`, distinction 404 vs flux malformé — dette suivie depuis la Story 1.1).
 - **Story 2.3 — Respecter le débit/backoff.** Retry/backoff sur 429/5xx, pertinent dès qu'une source comme Hacker News (Algolia) ou GitHub est interrogée nuit après nuit.
 - **Story 2.4 — Dédoublonner à l'échelle.** `dedup.py` a été conçu et testé pour 4 sources ; vérifier son comportement (performance, transitivité) à 17 sources et plus.
 - **Epic 3 — Génération nocturne automatique.** Rend le pipeline réellement autonome (ordonnancement, idempotence du job, état « déjà vu » validé après publication) — le bénéfice le plus visible au quotidien (Abdoulaye n'a plus rien à déclencher), mais suppose `store.py`/SQLite (AD-5) encore à construire. Prérequis aussi pour évaluer sur plusieurs nuits deux incertitudes trouvées en Story 2.1 (rendement réel de `pour_le_metier`, réglage du seuil Hacker News).
@@ -536,4 +556,4 @@ Point d'entrée unique : `collecter()` → `enrichir()` → `marquer_recommandat
 Autres points ouverts (§7, §8), non liés à un Epic en particulier :
 - `Score.motifs` (`filter.py`) existe toujours et n'est consommé par rien — resterait disponible si un besoin d'affichage l'exigeait plus tard.
 - Le doublon de l'avertissement « registre inconnu » (`render.py`, Story 1.9) — bruit de log mineur, pas fonctionnel, non corrigé faute d'un correctif proportionné.
-- **`rss_connector._to_utc_datetime` mal-date silencieusement 5 des 17 sources du socle** (trouvé en Story 2.1, hors périmètre « sans modification de code » de cette story) — candidat naturel pour la Story 2.2, qui touche déjà à la robustesse des connecteurs.
+- **`rss_connector._to_utc_datetime` mal-date silencieusement 5 des 17 sources du socle** (trouvé en Story 2.1) — la Story 2.2 a bien touché `rss_connector.py` (timeout/isolation de panne), mais délibérément pas ce point : une préoccupation distincte (parsing de date, pas récupération réseau), laissée pour une story dédiée ou un futur passage sur ce fichier.
