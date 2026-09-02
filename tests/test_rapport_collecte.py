@@ -8,6 +8,8 @@ qui rend tous les autres défauts visibles.
 import textwrap
 from pathlib import Path
 
+import pytest
+
 from veille.collect import collecter, run
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
@@ -105,6 +107,194 @@ def test_une_source_en_echec_est_distinguee_d_une_source_muette(tmp_path):
     # Une source en échec n'est pas « muette » : la cause est connue.
     assert not resultat.sources_muettes
     assert resultat.rapports[0].echec  # raison renseignée
+
+
+def test_une_panne_http_rss_est_capturee_avec_sa_cause(tmp_path, monkeypatch):
+    """Story 2.2 (AC1/AC3) : avant cette story, une panne HTTP sur une
+    source RSS ne levait jamais (avalée dans le mécanisme `bozo`) et
+    remontait comme MUETTE plutôt qu'ÉCHEC — la cause était perdue."""
+    import httpx
+
+    import veille.connectors.rss_connector as rss_module
+
+    def _get_403(url, timeout, follow_redirects, headers):
+        return httpx.Response(403, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(rss_module.httpx, "get", _get_403)
+
+    socle = _ecrire_socle(
+        tmp_path,
+        """
+        sources:
+          - id: source-en-panne-http
+            type: rss
+            url: https://exemple.invalid/flux.xml
+            langue: fr
+            registre: apprendre
+        """,
+    )
+
+    resultat = collecter(socle)
+
+    en_echec = [r.source_id for r in resultat.sources_en_echec]
+    assert en_echec == ["source-en-panne-http"]
+    assert not resultat.sources_muettes
+    assert "403" in resultat.rapports[0].echec
+
+
+def test_anomalie_signalee_quand_plus_de_la_moitie_des_sources_echouent(tmp_path, caplog):
+    """Story 2.2 (AC4) : au-delà de 50 % de sources en échec la même nuit,
+    le digest est quand même produit, mais l'anomalie doit être visible."""
+    socle = _ecrire_socle(
+        tmp_path,
+        f"""
+        sources:
+          - id: cassee-1
+            type: json
+            url: file:///chemin/inexistant-1.json
+            langue: fr
+            registre: apprendre
+          - id: cassee-2
+            type: json
+            url: file:///chemin/inexistant-2.json
+            langue: fr
+            registre: apprendre
+          - id: cassee-3
+            type: json
+            url: file:///chemin/inexistant-3.json
+            langue: fr
+            registre: apprendre
+          - id: source-vivante
+            type: rss
+            url: {(FIXTURE_DIR / "sample_feed.xml").as_posix()}
+            langue: fr
+            registre: apprendre
+        """,
+    )
+
+    import logging
+
+    with caplog.at_level(logging.ERROR, logger="veille.collect"):
+        resultat = collecter(socle)
+
+    # 3/4 sources en échec (75 %) : le digest est quand même produit...
+    assert len(resultat.items) == 2
+    # ... mais l'anomalie doit être détectable et journalisée de façon visible.
+    assert resultat.anomalie_pannes is True
+    assert resultat.taux_echec == pytest.approx(0.75)
+    assert any("3/4" in record.message for record in caplog.records)
+    assert any(record.levelno == logging.ERROR for record in caplog.records)
+
+
+def test_pas_d_anomalie_quand_la_moitie_ou_moins_des_sources_echouent(tmp_path):
+    """« Plus de la moitié » exclut l'égalité exacte à 50 %."""
+    socle = _ecrire_socle(
+        tmp_path,
+        f"""
+        sources:
+          - id: cassee-1
+            type: json
+            url: file:///chemin/inexistant-1.json
+            langue: fr
+            registre: apprendre
+          - id: source-vivante
+            type: rss
+            url: {(FIXTURE_DIR / "sample_feed.xml").as_posix()}
+            langue: fr
+            registre: apprendre
+        """,
+    )
+
+    resultat = collecter(socle)
+
+    assert resultat.anomalie_pannes is False
+    assert resultat.taux_echec == pytest.approx(0.5)
+
+
+def test_un_type_de_source_mal_orthographie_ne_compte_pas_comme_panne_reseau(tmp_path):
+    """Trouvé en revue (Story 2.2) : une faute de frappe dans `type:` est une
+    erreur de configuration statique, jamais tentée par un connecteur — pas
+    une panne réseau/HTTP de la nuit. Ne doit pas déclencher l'anomalie."""
+    socle = _ecrire_socle(
+        tmp_path,
+        f"""
+        sources:
+          - id: type-invalide
+            type: rrs
+            url: https://exemple.invalid/flux.xml
+            langue: fr
+            registre: apprendre
+          - id: source-vivante
+            type: rss
+            url: {(FIXTURE_DIR / "sample_feed.xml").as_posix()}
+            langue: fr
+            registre: apprendre
+        """,
+    )
+
+    resultat = collecter(socle)
+
+    # La source à type invalide est bien en échec (pas muette)...
+    assert [r.source_id for r in resultat.sources_en_echec] == ["type-invalide"]
+    # ... mais elle ne compte pas dans le taux de panne réseau/HTTP : 0/2,
+    # pas 1/2. Sans quoi une simple faute de frappe pourrait, à elle seule
+    # ou combinée à une autre, déclencher à tort l'anomalie de la nuit.
+    assert resultat.sources_en_panne_reseau == []
+    assert resultat.taux_echec == 0.0
+    assert resultat.anomalie_pannes is False
+
+
+def test_une_source_rss_en_panne_http_n_empeche_pas_la_collecte_d_une_autre_source_rss(
+    tmp_path, monkeypatch
+):
+    """AC1, spécifiquement RSS-vs-RSS : jusqu'ici, seule une source RSS en
+    échec associée à une source d'un AUTRE type avait été testée (voir les
+    tests ci-dessus). Trouvé en revue (Story 2.2) : vérifier explicitement
+    que deux sources RSS dans le même run — l'une en panne HTTP, l'autre
+    vivante — n'interfèrent pas."""
+    import httpx
+
+    import veille.connectors.rss_connector as rss_module
+
+    appels = {"n": 0}
+
+    def _get_selon_url(url, timeout, follow_redirects, headers):
+        appels["n"] += 1
+        if url == "https://exemple.invalid/en-panne.xml":
+            return httpx.Response(500, request=httpx.Request("GET", url))
+        return httpx.Response(
+            200,
+            content=(FIXTURE_DIR / "sample_feed.xml").read_bytes(),
+            request=httpx.Request("GET", url),
+        )
+
+    monkeypatch.setattr(rss_module.httpx, "get", _get_selon_url)
+
+    socle = _ecrire_socle(
+        tmp_path,
+        """
+        sources:
+          - id: rss-en-panne
+            type: rss
+            url: https://exemple.invalid/en-panne.xml
+            langue: fr
+            registre: apprendre
+          - id: rss-vivante
+            type: rss
+            url: https://exemple.invalid/vivante.xml
+            langue: fr
+            registre: apprendre
+        """,
+    )
+
+    resultat = collecter(socle)
+
+    assert appels["n"] == 2
+    en_echec = [r.source_id for r in resultat.sources_en_echec]
+    assert en_echec == ["rss-en-panne"]
+    retenus = {r.source_id: r.nb_items for r in resultat.rapports}
+    assert retenus["rss-vivante"] == 2
+    assert len(resultat.items) == 2
 
 
 def test_le_resume_est_lisible_et_mentionne_les_anomalies(tmp_path):

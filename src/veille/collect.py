@@ -124,6 +124,35 @@ class ResultatCollecte:
         return [r for r in self.rapports if r.est_muette]
 
     @property
+    def sources_en_panne_reseau(self) -> list[RapportSource]:
+        """Sources en échec (`sources_en_echec`) dont le `type` est reconnu,
+        c'est-à-dire dont un connecteur a réellement été tenté et a échoué —
+        exclut une source dont le `type` est mal orthographié dans
+        `sources.yaml` : c'est une faute de configuration statique, jamais
+        tentée par un connecteur, pas une panne réseau/HTTP de la nuit
+        (FR-2, trouvé en revue de la Story 2.2)."""
+        return [r for r in self.sources_en_echec if r.type in CONNECTORS]
+
+    @property
+    def taux_echec(self) -> float:
+        """Proportion du socle en panne réseau/HTTP réelle cette nuit (0.0 si
+        aucune source configurée) — ni les sources muettes (zéro item sans
+        erreur), ni les sources absorbées, ni une source dont le `type` est
+        mal orthographié (Story 2.2, FR-2)."""
+        if not self.rapports:
+            return 0.0
+        return len(self.sources_en_panne_reseau) / len(self.rapports)
+
+    @property
+    def anomalie_pannes(self) -> bool:
+        """**Plus de** la moitié des sources en panne réseau/HTTP la même
+        nuit (FR-2, seuil d'anomalie du PRD) — égalité exacte à 50 % non
+        incluse. Ne bloque jamais la production du digest : sert uniquement
+        à signaler une nuit anormale, à un niveau de journal distinct du
+        détail par source déjà existant (Story 2.2)."""
+        return self.taux_echec > 0.5
+
+    @property
     def sources_absorbees(self) -> list[RapportSource]:
         return [r for r in self.rapports if r.est_absorbee]
 
@@ -350,6 +379,27 @@ def _compter_dates_approximatives(items: list[Item], debut: datetime) -> int:
 def _journaliser(resultat: ResultatCollecte) -> None:
     """Publie le récapitulatif à un niveau réellement visible en production."""
     logger.info("%s", resultat.resume())
+
+    if resultat.anomalie_pannes:
+        # Niveau ERROR, agrégé — distinct des traces `logger.exception`
+        # déjà émises par source dans `_fetch_one` (déjà au niveau ERROR
+        # elles aussi, mais une par source, noyées dans le journal d'une
+        # nuit chargée) : une majorité de pannes la même nuit est une
+        # anomalie qui mérite une ligne récapitulative à elle seule, même si
+        # le digest est quand même produit avec ce qui a pu être collecté
+        # (FR-2, Story 2.2). Les sources concernées sont nommées, pour ne
+        # pas obliger à recorréler avec les traces individuelles. Pas de
+        # bandeau sur la page publiée ici — nécessiterait un état
+        # persistant, voir Dev Notes de la story et dette Epic 3.
+        logger.error(
+            "ANOMALIE : %d/%d sources en panne réseau/HTTP cette nuit "
+            "(%.0f%%) — %s — le digest est quand même produit avec ce qui "
+            "a pu être collecté.",
+            len(resultat.sources_en_panne_reseau),
+            len(resultat.rapports),
+            resultat.taux_echec * 100,
+            ", ".join(r.source_id for r in resultat.sources_en_panne_reseau),
+        )
 
     for rapport in resultat.sources_muettes:
         logger.warning(

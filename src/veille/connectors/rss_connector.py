@@ -8,13 +8,19 @@ import calendar
 import hashlib
 import logging
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 import feedparser
+import httpx
 
 from veille.config import SourceConfig
 from veille.models import Item
 
 logger = logging.getLogger(__name__)
+
+TIMEOUT_SECONDES = 30
+# ASCII uniquement : les en-têtes HTTP n'acceptent pas les caractères accentués.
+USER_AGENT = "veille-ia/0.1 (personal news aggregator)"
 
 
 def fetch(source_config: SourceConfig) -> list[Item]:
@@ -28,8 +34,14 @@ def fetch(source_config: SourceConfig) -> list[Item]:
 
     Une entrée individuelle défaillante est ignorée sans faire perdre les
     autres entrées de la même source (AD-6 au niveau de l'entrée).
+
+    La récupération réseau elle-même (délai d'attente, statut HTTP) est
+    isolée dans `_charger` : une panne à ce niveau lève (`httpx.TimeoutException`,
+    `httpx.HTTPStatusError`...), volontairement pas capturée ici — c'est
+    `collect._fetch_one` qui isole chaque source par panne (AD-6), exactement
+    comme pour `json_connector`/`scrape_connector` (Story 2.2).
     """
-    feed = feedparser.parse(source_config.url)
+    feed = feedparser.parse(_charger(source_config.url))
 
     if feed.bozo:
         logger.warning(
@@ -63,6 +75,39 @@ def fetch(source_config: SourceConfig) -> list[Item]:
             )
 
     return items
+
+
+def _charger(url: str) -> str | bytes:
+    """Récupère le flux, depuis le réseau (délai d'attente explicite) ou
+    depuis un chemin local (tests) — même patron que `json_connector._charger`
+    et `scrape_connector._charger` (Story 2.2).
+
+    Seule une URL réseau (`http(s)://`) passe par `httpx` : un chemin de
+    fichier brut ou une URI `file://` (utilisés par tous les tests existants
+    et jamais par une source réelle de ce projet) est rendu tel quel, pour
+    que `feedparser.parse()` continue de le lire lui-même sans changement de
+    comportement.
+
+    Ne capture aucune exception réseau (délai dépassé, statut HTTP) :
+    `collect._fetch_one` isole chaque source par panne (AD-6), exactement
+    comme pour les deux autres connecteurs.
+    """
+    # `urlparse(...).scheme` (pas `str.startswith`) : insensible à la casse et
+    # tolérant à un espace de tête, comme `_collecte_autorisee` de
+    # `scrape_connector.py` — un schéma `HTTP://` ou un chemin mal formé ne
+    # doit pas retomber silencieusement sur la branche locale, sans quoi la
+    # panne que cette story ferme (Task 1) reviendrait pour cette seule URL.
+    if urlparse(url).scheme not in ("http", "https"):
+        return url
+
+    reponse = httpx.get(
+        url,
+        timeout=TIMEOUT_SECONDES,
+        follow_redirects=True,
+        headers={"User-Agent": USER_AGENT},
+    )
+    reponse.raise_for_status()
+    return reponse.content
 
 
 def _to_item(entry, source_config: SourceConfig) -> Item:
