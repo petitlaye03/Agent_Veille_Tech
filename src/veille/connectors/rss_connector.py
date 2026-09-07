@@ -11,9 +11,16 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 import feedparser
-import httpx
+import httpx  # noqa: F401 — non appelé directement (délégué à `_reseau`), mais
+# gardé importé ici : `tests/test_rss_connector.py`/`test_rapport_collecte.py`
+# (Story 2.2) monkeypatchent `module.httpx.get` — comme `httpx` est un module
+# singleton (`sys.modules`), muter son attribut `get` depuis cette référence
+# affecte aussi l'appel réel fait dans `_reseau.get_avec_backoff` (Story 2.3).
+# Retirer cet import casserait ces tests avec une simple `AttributeError`,
+# sans rapport avec le comportement réellement testé.
 
 from veille.config import SourceConfig
+from veille.connectors._reseau import get_avec_backoff
 from veille.models import Item
 
 logger = logging.getLogger(__name__)
@@ -100,13 +107,12 @@ def _charger(url: str) -> str | bytes:
     if urlparse(url).scheme not in ("http", "https"):
         return url
 
-    reponse = httpx.get(
+    reponse = get_avec_backoff(
         url,
         timeout=TIMEOUT_SECONDES,
         follow_redirects=True,
         headers={"User-Agent": USER_AGENT},
     )
-    reponse.raise_for_status()
     return reponse.content
 
 

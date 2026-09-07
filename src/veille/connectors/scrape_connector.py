@@ -21,6 +21,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from veille.config import SourceConfig
+from veille.connectors._reseau import get_avec_backoff
 from veille.models import Item
 
 logger = logging.getLogger(__name__)
@@ -152,19 +153,19 @@ def _collecte_autorisee(url: str) -> bool:
 
 
 def _charger(url: str) -> str:
-    """Lit la page, depuis le réseau ou depuis un fichier local (tests)."""
+    """Lit la page, depuis le réseau (avec backoff sur 429, Story 2.3) ou
+    depuis un fichier local (tests)."""
     if url.startswith("file://"):
         chemin = url2pathname(urlparse(url).path)
         with open(chemin, encoding="utf-8") as f:
             return f.read()
 
-    reponse = httpx.get(
+    reponse = get_avec_backoff(
         url,
         timeout=TIMEOUT_SECONDES,
         follow_redirects=True,
         headers={"User-Agent": USER_AGENT},
     )
-    reponse.raise_for_status()
     return reponse.text
 
 

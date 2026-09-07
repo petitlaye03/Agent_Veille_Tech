@@ -374,3 +374,198 @@ def test_run_reste_compatible_et_ne_retourne_que_les_items(tmp_path):
 
     assert isinstance(items, list)
     assert len(items) == 2
+
+
+def test_un_429_persistant_devient_une_panne_normale_sans_bloquer_les_autres(
+    tmp_path, monkeypatch
+):
+    """Story 2.3 (AC3/AC4) : après épuisement du backoff, un 429 persistant
+    redevient une panne isolée comme n'importe quelle autre (AD-6) — les
+    autres sources du socle restent collectées."""
+    import httpx
+
+    import veille.connectors._reseau as reseau_module
+
+    def _get_429(url, timeout, follow_redirects, headers=None):
+        return httpx.Response(429, request=httpx.Request("GET", url))
+
+    # Monkeypatché sur `_reseau` directement (pas via `rss_connector.httpx`,
+    # qui ne fonctionne que parce que `httpx` est un module singleton
+    # partagé — trouvé fragile en revue) : cible sans ambiguïté le point où
+    # la requête a réellement lieu.
+    monkeypatch.setattr(reseau_module.httpx, "get", _get_429)
+    monkeypatch.setattr(reseau_module.time, "sleep", lambda s: None)
+
+    socle = _ecrire_socle(
+        tmp_path,
+        f"""
+        sources:
+          - id: rss-rate-limitee
+            type: rss
+            url: https://exemple.invalid/flux.xml
+            langue: fr
+            registre: apprendre
+          - id: source-vivante
+            type: rss
+            url: {(FIXTURE_DIR / "sample_feed.xml").as_posix()}
+            langue: fr
+            registre: apprendre
+        """,
+    )
+
+    resultat = collecter(socle)
+
+    en_echec = [r.source_id for r in resultat.sources_en_echec]
+    assert en_echec == ["rss-rate-limitee"]
+    echecs_par_source = {r.source_id: r.echec for r in resultat.rapports}
+    assert "429" in echecs_par_source["rss-rate-limitee"]
+    retenus = {r.source_id: r.nb_items for r in resultat.rapports}
+    assert retenus["source-vivante"] == 2
+    assert len(resultat.items) == 2
+
+
+def test_un_429_qui_reussit_apres_backoff_produit_des_items_normalement(
+    tmp_path, monkeypatch
+):
+    """Story 2.3 (AC1) : un 429 suivi d'un succès (dans la limite de
+    MAX_TENTATIVES) ne doit laisser aucune trace d'échec — le backoff a
+    fait son travail."""
+    import httpx
+
+    import veille.connectors._reseau as reseau_module
+
+    reponses = [
+        httpx.Response(429, request=httpx.Request("GET", "https://exemple.invalid/flux.xml")),
+        httpx.Response(
+            200,
+            content=(FIXTURE_DIR / "sample_feed.xml").read_bytes(),
+            request=httpx.Request("GET", "https://exemple.invalid/flux.xml"),
+        ),
+    ]
+
+    def _get_puis_succes(url, timeout, follow_redirects, headers=None):
+        return reponses.pop(0)
+
+    dormis = []
+    monkeypatch.setattr(reseau_module.httpx, "get", _get_puis_succes)
+    monkeypatch.setattr(reseau_module.time, "sleep", lambda s: dormis.append(s))
+
+    socle = _ecrire_socle(
+        tmp_path,
+        """
+        sources:
+          - id: rss-temporairement-limitee
+            type: rss
+            url: https://exemple.invalid/flux.xml
+            langue: fr
+            registre: apprendre
+        """,
+    )
+
+    resultat = collecter(socle)
+
+    assert not resultat.sources_en_echec
+    assert resultat.rapports[0].nb_items == 2
+    assert len(dormis) == 1
+
+
+def test_le_backoff_429_fonctionne_aussi_pour_une_source_json(tmp_path, monkeypatch):
+    """Story 2.3 (AC2) : le backoff est partagé par les trois connecteurs,
+    pas seulement `rss` — vérifié ici pour `json` (jusque-là, seul le
+    connecteur RSS était exercé de bout en bout avec un vrai 429, trouvé en
+    revue)."""
+    import httpx
+
+    import veille.connectors._reseau as reseau_module
+
+    reponses = [
+        httpx.Response(429, request=httpx.Request("GET", "https://exemple.invalid/api.json")),
+        httpx.Response(
+            200,
+            content=(FIXTURE_DIR / "hf_daily_papers.json").read_bytes(),
+            request=httpx.Request("GET", "https://exemple.invalid/api.json"),
+        ),
+    ]
+
+    def _get_puis_succes(url, timeout, follow_redirects, headers=None):
+        return reponses.pop(0)
+
+    dormis = []
+    monkeypatch.setattr(reseau_module.httpx, "get", _get_puis_succes)
+    monkeypatch.setattr(reseau_module.time, "sleep", lambda s: dormis.append(s))
+
+    socle = _ecrire_socle(
+        tmp_path,
+        """
+        sources:
+          - id: json-temporairement-limitee
+            type: json
+            url: https://exemple.invalid/api.json
+            langue: en
+            registre: apprendre
+            mapping:
+              guid: paper.id
+              titre: title
+        """,
+    )
+
+    resultat = collecter(socle)
+
+    assert not resultat.sources_en_echec
+    assert resultat.rapports[0].nb_items == 2
+    assert len(dormis) == 1
+
+
+def test_le_backoff_429_fonctionne_aussi_pour_une_source_scrape(tmp_path, monkeypatch):
+    """Story 2.3 (AC2) : idem pour `scrape` — la page elle-même (`_charger`),
+    pas la requête `robots.txt` (`_collecte_autorisee`, non branchée sur le
+    backoff par choix explicite).
+
+    `httpx` étant un module singleton partagé, monkeypatcher `_reseau.httpx`
+    intercepte aussi la requête `robots.txt` de `_collecte_autorisee` (qui
+    n'appelle pas `get_avec_backoff`, mais `httpx.get` directement sur le
+    même module) : la router par URL pour ne pas confondre les deux appels.
+    """
+    import httpx
+
+    import veille.connectors._reseau as reseau_module
+
+    page_html = (
+        '<a href="/news/a"><h2>Article A</h2><time datetime="2026-07-24">24 juillet 2026</time></a>'
+    ).encode("utf-8")
+
+    reponses_page = [
+        httpx.Response(429, request=httpx.Request("GET", "https://exemple.invalid/news")),
+        httpx.Response(200, content=page_html, request=httpx.Request("GET", "https://exemple.invalid/news")),
+    ]
+
+    def _get_route_par_url(url, timeout, follow_redirects, headers=None):
+        if url.endswith("/robots.txt"):
+            # 404 : pas de robots.txt — collecte autorisée par défaut,
+            # comportement inchangé de `_collecte_autorisee`.
+            return httpx.Response(404, request=httpx.Request("GET", url))
+        return reponses_page.pop(0)
+
+    dormis = []
+    monkeypatch.setattr(reseau_module.httpx, "get", _get_route_par_url)
+    monkeypatch.setattr(reseau_module.time, "sleep", lambda s: dormis.append(s))
+
+    socle = _ecrire_socle(
+        tmp_path,
+        """
+        sources:
+          - id: scrape-temporairement-limitee
+            type: scrape
+            url: https://exemple.invalid/news
+            langue: fr
+            registre: apprendre
+            selecteur: /news/
+            base_url: https://exemple.invalid
+        """,
+    )
+
+    resultat = collecter(socle)
+
+    assert not resultat.sources_en_echec
+    assert resultat.rapports[0].nb_items == 1
+    assert len(dormis) == 1

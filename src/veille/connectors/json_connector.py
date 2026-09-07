@@ -13,9 +13,8 @@ from typing import Any
 from urllib.request import url2pathname
 from urllib.parse import quote, urlparse
 
-import httpx
-
 from veille.config import SourceConfig
+from veille.connectors._reseau import get_avec_backoff
 from veille.models import Item
 
 logger = logging.getLogger(__name__)
@@ -59,8 +58,7 @@ def _charger(url: str) -> Any:
         with open(chemin, encoding="utf-8") as f:
             return json.load(f)
 
-    reponse = httpx.get(url, timeout=TIMEOUT_SECONDES, follow_redirects=True)
-    reponse.raise_for_status()
+    reponse = get_avec_backoff(url, timeout=TIMEOUT_SECONDES, follow_redirects=True)
     return reponse.json()
 
 
