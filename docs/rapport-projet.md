@@ -8,9 +8,9 @@
 > code, pas un instantané figé. La §10 (Référence technique) en particulier
 > doit être corrigée dès qu'un fichier qu'elle décrit change de comportement.
 >
-> **Dernière mise à jour :** 2026-09-02, fin de la Story 2.2 (dev + revue).
-> **Story courante :** aucune (2.2 terminée, `done` — **Epic 2**, 2/4 stories faites).
-> **Prochaine étape :** Story 2.3 (respecter les sources sensibles au débit) — voir §11.
+> **Dernière mise à jour :** 2026-09-07, fin de la Story 2.3 (dev + revue).
+> **Story courante :** aucune (2.3 terminée, `done` — **Epic 2**, 3/4 stories faites).
+> **Prochaine étape :** Story 2.4 (dédoublonner à l'échelle du socle complet) — voir §11.
 
 ---
 
@@ -84,7 +84,7 @@ Projet mené en méthode **BMAD** : brief → PRD → architecture → epics/sto
 | Epic | Contenu | État |
 |---|---|---|
 | **Epic 1** | Un premier digest, réel, bout en bout (3-5 sources) | ✅ **Terminé** — Stories 1.1-1.9 toutes `done` |
-| **Epic 2** | Socle élargi (15-20 sources) et robustesse aux pannes | 🟡 En cours — Stories 2.1/2.2 `done`, 2.3/2.4 à faire |
+| **Epic 2** | Socle élargi (15-20 sources) et robustesse aux pannes | 🟡 En cours — Stories 2.1/2.2/2.3 `done`, 2.4 à faire |
 | **Epic 3** | Génération nocturne automatique | ⏳ Pas commencé |
 | **Epic 4** | Santé des sources et découverte de nouvelles sources | ⏳ Pas commencé |
 
@@ -110,8 +110,9 @@ Projet mené en méthode **BMAD** : brief → PRD → architecture → epics/sto
 |---|---|---|---|
 | 2.1 | Étendre le socle aux 15-20 sources visées | ✅ `done` | 323 → **324** |
 | 2.2 | Continuer à fonctionner quand une source tombe en panne | ✅ `done` | 324 → **335** |
+| 2.3 | Respecter les sources sensibles au débit | ✅ `done` | 335 → **350** |
 
-**Total tests actuel : 335, tous verts** (`uv run pytest`).
+**Total tests actuel : 350, tous verts** (`uv run pytest`).
 
 ## 6. Ce qui est livré, story par story
 
@@ -239,6 +240,16 @@ Première story de l'Epic 2. Pure extension de configuration : `config/sources.y
 
 7 correctifs, 1 report (redirections HTTP non plafonnées — motif préexistant aux 3 connecteurs, pas introduit ici), 6 rejets — dont le choix délibéré de ne pas compter les sources « muettes » dans l'anomalie (déjà explicite dans l'AC4) et la séquentialité du run (hors périmètre, Story 2.3). 324 → 335 tests. Détail complet : [2-2-continuer-en-panne.md](../_bmad-output/implementation-artifacts/2-2-continuer-en-panne.md).
 
+### 6.12 — Story 2.3 : respecter les sources sensibles au débit
+
+Aucune des 17 sources actuelles n'est aujourd'hui connue pour limiter le débit — Reddit, le cas le plus documenté par l'addendum du brief (« `.rss` → 429 dès la 3ᵉ requête, espacer de 5-8s minimum, prévoir un backoff exponentiel »), n'est pas dans ce socle (bloqué par une démarche OAuth de 2-4 semaines, hors périmètre). Cette story construit donc une capacité générale et réactive plutôt que d'attendre une vraie source rate-limitée : l'addendum lui-même le demande (« prévoir du backoff dès la v1 »), et le FR-2 du PRD le formule en toute généralité.
+
+Nouveau module `src/veille/connectors/_reseau.py` (`get_avec_backoff`), partagé par les trois connecteurs plutôt que triplé — devenu possible précisément parce que la Story 2.2 avait déjà harmonisé les trois `_charger` sur le même patron `httpx.get(...) + raise_for_status()`. Retry uniquement sur `429` (jusqu'à 3 tentatives), respecte l'en-tête `Retry-After` du serveur (secondes) sinon un backoff exponentiel parti de 5s ; toute autre erreur HTTP lève immédiatement, sans retry. Branché sur les trois `_charger` (page/flux/API), jamais sur `scrape_connector._collecte_autorisee` (requête `robots.txt`, une seule fois par source et par nuit, déjà dégradée proprement sur toute exception). Au-delà des tentatives, un 429 persistant redevient une panne normale (`RapportSource.echec`), sans aucune modification de `collect.py` — l'isolation AD-6 existante suffit.
+
+**Revue de code (Sonnet 5)** — les 3 couches ont convergé indépendamment sur le même constat le plus sérieux, avec une gravité croissante à chaque couche : `Retry-After` n'était ni plafonné ni protégé contre une valeur non finie. Un serveur pouvait légitimement renvoyer un délai de plusieurs heures, que la collecte strictement séquentielle aurait alors respecté en bloquant toutes les sources suivantes du socle pour cette durée — en tension avec l'esprit même de l'AC visant à ne jamais bloquer les autres sources. Plus grave : l'Edge Case Hunter a vérifié empiriquement qu'un `Retry-After: inf` (valeur Python valide via `float()`) faisait planter `time.sleep` (`OverflowError`), contredisant la propre promesse de la fonction. Corrigé par un plafond (`DELAI_MAX_SECONDES = 60`) et un rejet explicite des valeurs non finies (`math.isfinite`). Second constat convergent : le backoff n'était vérifié de bout en bout (avec un vrai 429 simulé) que pour `rss_connector.py`, jamais pour `json_connector.py`/`scrape_connector.py`, alors que l'AC affirme le mécanisme « partagé par les trois connecteurs » — deux tests d'intégration ajoutés pour fermer ce trou. Troisième constat : les nouveaux tests d'intégration ciblaient `rss_connector.httpx` par un couplage fragile (fonctionne seulement parce que `httpx` est un module singleton) plutôt que `_reseau.httpx` directement — reciblé, sans toucher aux tests **existants** de la Story 2.2 qui, eux, doivent continuer de fonctionner via ce même couplage documenté.
+
+4 correctifs, 0 report, 6 rejets — dont l'absence de jitter sur le backoff (le problème qu'il résout, la contention entre clients concurrents, ne se pose pas dans une collecte strictement séquentielle) et le choix délibéré de ne pas brancher le backoff sur la requête `robots.txt`. 335 → 350 tests. Détail complet : [2-3-respecter-le-debit.md](../_bmad-output/implementation-artifacts/2-3-respecter-le-debit.md).
+
 ## 7. Journal des décisions structurantes (cumulatif)
 
 Ce journal ne répète pas le détail des stories (§6) ; il ne garde que ce qui **contraint les stories suivantes**.
@@ -279,19 +290,29 @@ Ce journal ne répète pas le détail des stories (§6) ; il ne garde que ce qui
 34. **Une nuance de casse ou de format dans une comparaison de schéma d'URL peut rouvrir silencieusement un trou déjà fermé** — `str.startswith(("http://", "https://"))` est sensible à la casse et à un espace de tête, contrairement à `urlparse(...).scheme` (déjà utilisé par `scrape_connector._collecte_autorisee`) qui normalise les deux. Un `HTTP://` littéral aurait fait retomber une source réseau sur la branche « locale », réintroduisant pour cette URL l'absence de timeout que la story visait justement à corriger (Story 2.2, trouvé en revue).
 35. **Un taux d'anomalie agrégé doit filtrer les causes qu'il ne doit pas compter, pas seulement réutiliser un compteur existant tel quel** — `anomalie_pannes` (Story 2.2) réutilisait d'abord `sources_en_echec` tel quel, qui inclut aussi bien une vraie panne réseau/HTTP qu'une source dont le `type` est mal orthographié (jamais tentée par un connecteur). Une réutilisation directe aurait laissé une simple faute de frappe de configuration se faire passer pour une nuit de panne réseau — corrigé par un filtre explicite (`type in CONNECTORS`) avant de calculer le taux (Story 2.2, trouvé en revue).
 36. **Une vérification réelle qui ne compare que des comptes (nombre d'items, de lignes) peut manquer une régression de contenu** — la vérification réseau de la Story 2.2 (avant/après le passage à `httpx`) confirmait le même nombre d'items sur 3 sources réelles, mais n'aurait pas détecté un mauvais décodage silencieux qui préserve le compte (accents corrompus). Un test automatisé et reproductible (en-tête `Content-Type` menteur simulé) verrouille désormais le **contenu** décodé, pas seulement le compte — leçon complémentaire à la #14, qui portait sur la fraîcheur de la vérification, pas sur ce qu'elle mesure réellement (Story 2.2, trouvé en revue).
+37. **Une valeur fournie par un tiers (en-tête HTTP, config externe) doit être validée sur sa plausibilité, pas seulement sur son type** — `float("inf")`/`float("1e300")` sont des valeurs Python parfaitement valides, mais `time.sleep()` plante sur la première et la seconde immobiliserait le run pour une durée déraisonnable ; `isinstance`/`try-except ValueError` ne suffisent pas à eux seuls, il faut aussi une borne explicite (`math.isfinite` + plafond) quand la donnée pilote une attente ou une ressource. Distinct de la leçon #14 (fraîcheur de la vérification) et de la #36 (ce qu'elle mesure) : ici, c'est la **plage de validité** qui manquait, pas la présence d'un contrôle (Story 2.3, trouvé en revue — confirmé empiriquement par l'Edge Case Hunter, qui a reproduit le plantage).
+38. **Un mécanisme neuf partagé par plusieurs points d'appel doit être vérifié de bout en bout à travers chacun, pas seulement à travers le premier qui vient à l'esprit** — le backoff de la Story 2.3 était exhaustivement testé en isolation (`_reseau.py`) et à travers `rss_connector.py`, mais jamais à travers `json_connector.py`/`scrape_connector.py`, alors que l'AC affirmait explicitement le mécanisme « partagé par les trois connecteurs ». Une couverture unitaire complète du composant partagé ne remplace pas une couverture d'intégration par appelant (Story 2.3, trouvé en revue — convergence Blind Hunter + Acceptance Auditor).
+39. **Un test qui ne fonctionne que grâce à un détail d'implémentation non garanti (ici : que deux modules important la même bibliothèque partagent le même objet singleton) doit cibler directement le point où l'effet a lieu, pas un raccourci qui marche par accident aujourd'hui** — les tests d'intégration ajoutés en Story 2.3 monkeypatchaient `rss_connector.httpx` en s'appuyant implicitement sur le fait que `httpx` est un module `sys.modules` partagé avec `_reseau.py` ; reciblés sur `_reseau.httpx` directement, la référence réellement appelée. Les tests **existants** de la Story 2.2, eux, continuent légitimement de s'appuyer sur ce couplage (documenté, vérifié, nécessaire pour ne pas les modifier) — la distinction est entre *découvrir* qu'un raccourci fonctionne et *choisir délibérément* de le garder pour une raison précise (Story 2.3, trouvé en revue).
 
 ## 8. Dette technique et travail reporté
 
 Liste vivante complète : [deferred-work.md](../_bmad-output/implementation-artifacts/deferred-work.md). Résumé de ce qui reste ouvert, par destination :
 
-**Epic 2 (socle élargi, robustesse)** — distinction 404 vs flux malformé, retry/backoff sur 429/5xx, plafond de taille des réponses HTTP, mode d'extraction « carte » pour le scraping (titre/date en frères de l'ancre, pas en descendants — bloque l'ajout de la plupart des blogs WordPress), en-têtes/authentification pour les API JSON (bloque Kaggle, prévu au socle v1 mais toujours pas construit — la Story 2.1 a explicitement laissé Kaggle de côté pour cette raison), `url_modele` limité à `{guid}`.
+**Epic 2 (socle élargi, robustesse)** — distinction 404 vs flux malformé, plafond de taille des réponses HTTP, mode d'extraction « carte » pour le scraping (titre/date en frères de l'ancre, pas en descendants — bloque l'ajout de la plupart des blogs WordPress), en-têtes/authentification pour les API JSON (bloque Kaggle, prévu au socle v1 mais toujours pas construit — la Story 2.1 a explicitement laissé Kaggle de côté pour cette raison), `url_modele` limité à `{guid}`.
 
 **Dette fermée en Story 2.1** : ~~`config/sources.yaml` ne déclare aucune source en registre `pour_le_metier`~~ — 2 sources ajoutées (`decideo`, `lemonde-informatique`), la 3ᵉ section du digest reçoit désormais des items réels.
 
 **Dette fermée en Story 2.2** : ~~timeout réseau absent sur `feedparser`/`rss_connector.py`~~ — `TIMEOUT_SECONDES = 30` + `User-Agent` explicite ajoutés (même patron que les deux autres connecteurs) ; ~~une panne HTTP sur une source RSS est avalée par `bozo`, remonte comme « muette » plutôt qu'« échec »~~ — corrigé, `RapportSource.echec` porte désormais la vraie cause.
 
+**Dette fermée en Story 2.3** : ~~retry/backoff sur 429~~ — `src/veille/connectors/_reseau.py` (`get_avec_backoff`), partagé par les trois connecteurs.
+
 **Trouvé en Story 2.2, reporté** :
 - **`httpx.get(..., follow_redirects=True)` n'impose aucune limite au nombre/à la durée totale des sauts de redirection**, sur les trois connecteurs (`json_connector.py`, `scrape_connector.py`, `rss_connector.py` depuis cette story). Le `timeout` de 30s borne chaque opération réseau, pas la chaîne complète de redirections d'une même source — atténue partiellement l'objectif « ne doit plus pouvoir bloquer indéfiniment ». Motif préexistant aux 3 connecteurs, pas introduit par cette story.
+
+**Trouvé en Story 2.3, non corrigé (déjà hors périmètre, mais à surveiller)** :
+- **Aucun retry/backoff sur `503`** (autre code souvent utilisé pour signaler une surcharge transitoire) — l'AC de cette story ne parle que de `429`, élargir sans cas d'usage documenté aurait été spéculatif.
+- **Pas de jitter sur le backoff exponentiel** — sans conséquence tant que la collecte reste strictement séquentielle (le problème que le jitter résout — la contention entre clients concurrents sur le même hôte — ne se pose pas ici) ; à reconsidérer si la collecte devient un jour parallèle/concurrente (aucun plan actuel en ce sens).
+- **`scrape_connector._collecte_autorisee` (requête `robots.txt`) n'est pas couverte par le backoff** — décision délibérée (une requête par source et par nuit, dégradation déjà propre sur toute exception y compris un 429), mais signifie qu'un domaine réellement en train de limiter le débit reçoit quand même cette requête non protégée juste avant la requête de page, elle protégée.
 
 **Trouvé en Story 2.1, reporté** :
 - **`rss_connector._to_utc_datetime` ne retombe jamais sur `updated_parsed` quand `published_parsed` est absent** — mal-date silencieusement, en permanence (pas seulement une nuit), les items des flux Atom purs et RDF (4 dépôts GitHub + Le Monde Informatique, 5/17 sources du socle actuel). Sans conséquence de justesse aujourd'hui (tri par score, pas par fraîcheur), mais consequential dès qu'une logique s'appuiera sur la date réelle (état « déjà vu » de l'Epic 3). Hors périmètre de la Story 2.1 (« sans modification de code ») — correctif proposé : replier sur `entry.get("updated_parsed")` avant le retour par défaut à `datetime.now()`.
@@ -318,7 +339,7 @@ Liste vivante complète : [deferred-work.md](../_bmad-output/implementation-arti
 - le `.git` était resté à la racine de `Projets_Perso/` (englobant à tort `Saas_chatbots/`, un projet distinct) — déplacé dans `Agent_veille_tech/.git` pour que ce dossier soit son propre dépôt, aligné sur le remote `petitlaye03/Agent_Veille_Tech` ;
 - `.venv` était un venv Windows inutilisable (`home = C:\Program Files\Python311`) — supprimé et reconstruit avec `uv sync` (`uv` installé via Homebrew, absent du Mac).
 
-**État actuel** : dépôt propre (Stories 1.4 à 1.9 committées et poussées — Epic 1 entièrement terminé ; Stories 2.1/2.2 committées et poussées — Epic 2 en cours). Aucun commit n'est fait automatiquement — décision du 2026-08-27 : les commits restent à la demande explicite d'Abdoulaye. Les dossiers `_bmad/`, `.claude/`, `_bmad-output/` sont suivis par git depuis le 2026-08-28 (réintégrés une fois le dépôt confirmé privé et le contenu relu — voir commit dédié entre les Stories 1.7 et 1.8).
+**État actuel** : dépôt propre (Stories 1.4 à 1.9 committées et poussées — Epic 1 entièrement terminé ; Stories 2.1/2.2/2.3 committées et poussées — Epic 2 en cours). Aucun commit n'est fait automatiquement — décision du 2026-08-27 : les commits restent à la demande explicite d'Abdoulaye. Les dossiers `_bmad/`, `.claude/`, `_bmad-output/` sont suivis par git depuis le 2026-08-28 (réintégrés une fois le dépôt confirmé privé et le contenu relu — voir commit dédié entre les Stories 1.7 et 1.8).
 
 **Secrets** : `ANTHROPIC_API_KEY` (`.env`, voir `.env.example`) — nécessaire pour que `enrich/llm.py` génère de vraies accroches. Aucune clé fournie à ce jour. `GITHUB_TOKEN` (Story 1.8, optionnel) — `publish.py` réutilise en repli la session `gh` déjà authentifiée localement (`gh auth token`) si cette variable est absente.
 
@@ -338,6 +359,7 @@ src/veille/
     rss_connector.py      Flux RSS/Atom
     json_connector.py     API JSON (mapping déclaratif)
     scrape_connector.py   Scraping HTML (sélecteurs sémantiques, robots.txt)
+    _reseau.py             Backoff HTTP partagé sur 429 (interne aux 3 connecteurs)
   dedup.py                Dédoublonnage inter/intra-source
   profil.py               Chargement et analyse de profil.md
   filter.py               Seuil de signal, scoring par profil, quotas par registre
@@ -397,8 +419,14 @@ C'est le **seul** point de couplage entre la collecte et tout ce qui suit : aucu
 
 Les trois connecteurs partagent le contrat `fetch(source_config: SourceConfig) -> list[Item]` (AD-2). Aucun autre module n'a besoin de savoir lequel est utilisé — `collect.CONNECTORS` fait le dispatch.
 
+**`_reseau.py`** (Story 2.3) — module de détail interne (préfixé `_`, hors du contrat public AD-2), partagé par les trois connecteurs ci-dessous plutôt que triplé.
+- `get_avec_backoff(url, *, timeout, headers=None, follow_redirects=True) -> httpx.Response` : appelle `httpx.get`, retente sur `429` uniquement (jusqu'à `MAX_TENTATIVES = 3`) ; toute autre erreur HTTP lève immédiatement, sans retry. Respecte l'en-tête `Retry-After` du serveur (secondes) quand il est présent, lisible et fini ; sinon (ou au-delà de `DELAI_MAX_SECONDES = 60`, plafond ajouté en revue) retombe sur un backoff exponentiel parti de `DELAI_DEFAUT_SECONDES = 5.0`.
+- `_delai_depuis_retry_after` : rejette explicitement les valeurs non finies (`inf`/`nan`, acceptées par `float()` mais qui feraient planter `time.sleep` — trouvé et vérifié empiriquement en revue) en plus des valeurs non numériques.
+- Au-delà de `MAX_TENTATIVES`, la dernière réponse 429 lève normalement (`httpx.HTTPStatusError`) : `collect._fetch_one` isole la panne comme n'importe quelle autre (AD-6), sans aucune modification de `collect.py`.
+- Volontairement **pas** branché sur `scrape_connector._collecte_autorisee` (requête `robots.txt`) — une seule requête par source et par nuit, déjà dégradée proprement sur toute exception.
+
 **`rss_connector.py`** — flux RSS/Atom via `feedparser`.
-- `_charger(url)` (Story 2.2) : dispatch sur `urlparse(url).scheme` — `http(s)://` récupère le flux via `httpx` (`TIMEOUT_SECONDES = 30`, `raise_for_status()`, `User-Agent` explicite), tout le reste (chemin local, `file://`) est rendu tel quel à `feedparser.parse()`, inchangé depuis la Story 1.1. Une panne HTTP (403/429/500) ou un délai dépassé lève désormais une vraie exception, capturée par l'isolation de `collect._fetch_one` (AD-6) — avant la Story 2.2, elle était avalée par le mécanisme `bozo` et la source apparaissait « muette » plutôt qu'« en échec ». Condition de branchement délibérément inversée par rapport à `json_connector._charger`/`scrape_connector._charger` ci-dessous (voir §7#33).
+- `_charger(url)` (Story 2.2, délègue à `get_avec_backoff` depuis la Story 2.3) : dispatch sur `urlparse(url).scheme` — `http(s)://` récupère le flux via le backoff partagé (`TIMEOUT_SECONDES = 30`, `User-Agent` explicite), tout le reste (chemin local, `file://`) est rendu tel quel à `feedparser.parse()`, inchangé depuis la Story 1.1. Une panne HTTP (403/429/500) ou un délai dépassé lève désormais une vraie exception, capturée par l'isolation de `collect._fetch_one` (AD-6) — avant la Story 2.2, elle était avalée par le mécanisme `bozo` et la source apparaissait « muette » plutôt qu'« en échec ». Condition de branchement délibérément inversée par rapport à `json_connector._charger`/`scrape_connector._charger` ci-dessous (voir §7#33). Conserve `import httpx` bien que non appelé directement (délégué), pour que les tests de la Story 2.2 qui monkeypatchent `module.httpx.get` restent valides (`httpx` est un module singleton partagé avec `_reseau.py` — voir §7#39).
 - Tolère un flux `bozo` (imparfait) tant qu'il expose des entrées exploitables ; ne renvoie une liste vide que si aucune entrée n'est récupérable.
 - `guid` : identifiant natif du flux en priorité, puis URL, puis hash SHA-256 `(source_id + titre)` — convention posée en Story 1.1.
 - `_extract_contenu` : repli en cascade `summary` → `content[0].value` (Atom) → `description`, pour ne jamais renvoyer un contenu vide alors que le flux en porte.
@@ -406,6 +434,7 @@ Les trois connecteurs partagent le contrat `fetch(source_config: SourceConfig) -
 - Isolation par entrée : une entrée corrompue n'emporte pas les autres.
 
 **`json_connector.py`** — API JSON, forme entièrement déclarée en configuration (`mapping`, chemins pointés type `paper.summary`).
+- `_charger` délègue à `get_avec_backoff` depuis la Story 2.3 (`import httpx` retiré, plus utilisé directement dans ce fichier).
 - `_resoudre_chemin`/`_champ` : navigation dans une structure imbriquée ; un champ absent du mapping vaut `None`, jamais l'entrée entière.
 - `guid` : `0` et `False` sont des identifiants valides (seuls `None`/`""` sont rejetés) ; un identifiant non scalaire (dict/list) lève une erreur explicite plutôt que de produire une URL corrompue.
 - `url_modele` : gabarit avec le `guid` encodé (`quote`) avant insertion.
@@ -413,7 +442,8 @@ Les trois connecteurs partagent le contrat `fetch(source_config: SourceConfig) -
 - `_to_utc_datetime` : accepte ISO 8601 et horodatages Unix (secondes ou millisecondes, seuil de bascule à 1e11).
 
 **`scrape_connector.py`** — scraping HTML, réservé aux sources sans flux ni API.
-- `_collecte_autorisee` : consulte `robots.txt` **avant toute requête** (AD-10) ; absent ou injoignable → collecte autorisée par défaut, présent et restrictif → respecté.
+- `_collecte_autorisee` : consulte `robots.txt` **avant toute requête** (AD-10) ; absent ou injoignable → collecte autorisée par défaut, présent et restrictif → respecté. Toujours son propre `httpx.get` direct, **pas** de backoff (voir `_reseau.py` ci-dessus).
+- `_charger` (récupération de la **page**, distincte de `_collecte_autorisee`) délègue à `get_avec_backoff` depuis la Story 2.3.
 - Extraction exclusivement par balises sémantiques (`h1`-`h4`, `time`, `p`) — jamais par classe CSS, qui change à chaque build d'un site moderne.
 - `_extraire_titre` : repli structurel quand aucun titre sémantique n'existe — identifie le bloc de métadonnées par la balise `<time>` qu'il contient, et prend le premier `span` **hors** de ce bloc.
 - `_extraire_date` : indépendant de la locale du système (table de mois explicite, formats numériques, regex) — `%b`/`%B` de `strptime` auraient échoué silencieusement sur un système en français.
@@ -520,7 +550,7 @@ Point d'entrée unique : `collecter()` → `enrichir()` → `marquer_recommandat
 
 ### 10.14 Tests
 
-335 tests, aucun appel réseau ni subprocess réel dans la suite automatisée (fixtures locales, clients simulés, `httpx.get` monkeypatché, résolution de jeton monkeypatchée) — seules les Tasks 2/4 des Stories 2.1/2.2 ont fait des exécutions réelles ponctuelles, hors suite `pytest`, documentées dans leurs Dev Agent Record respectifs. `tests/conftest.py` neutralise `profil.md`/`scoring.yaml`/`quotas.yaml` par défaut pour tous les tests (fixture `autouse`), afin qu'aucun test ne dépende implicitement de la configuration de production.
+350 tests, aucun appel réseau ni subprocess réel dans la suite automatisée (fixtures locales, clients simulés, `httpx.get`/`time.sleep` monkeypatchés, résolution de jeton monkeypatchée) — seules les Tasks 2/4 des Stories 2.1/2.2 ont fait des exécutions réelles ponctuelles, hors suite `pytest`, documentées dans leurs Dev Agent Record respectifs. `tests/conftest.py` neutralise `profil.md`/`scoring.yaml`/`quotas.yaml` par défaut pour tous les tests (fixture `autouse`), afin qu'aucun test ne dépende implicitement de la configuration de production.
 
 | Fichier | Périmètre | Tests |
 |---|---|---|
@@ -536,7 +566,8 @@ Point d'entrée unique : `collecter()` → `enrichir()` → `marquer_recommandat
 | `test_filter.py` | Signal, scoring, quotas, marge de recommandation — le plus gros fichier | 69 |
 | `test_llm.py` | Frontière LLM (client simulé, isolation par item) + recommandation (`determiner_recommandation`/`marquer_recommandation`) | 33 |
 | `test_collect.py` | `run()`, cas d'erreur de haut niveau, `resultats_repartis` | 10 |
-| `test_rapport_collecte.py` | Observabilité (`RapportSource`, états muette/échec, anomalie de pannes réseau — Story 2.2) | 11 |
+| `test_rapport_collecte.py` | Observabilité (`RapportSource`, états muette/échec, anomalie de pannes réseau — Story 2.2 ; backoff 429 de bout en bout sur les 3 connecteurs — Story 2.3) | 15 |
+| `test_reseau.py` | Backoff HTTP partagé sur 429 (`_reseau.get_avec_backoff`) — Story 2.3 | 11 |
 | `test_collecte_integration.py` | **Chemin réel** config → `collecter()` → rapport, pour chaque mécanisme | 25 |
 | `test_render.py` | Rendu HTML + Markdown : sections, palette, dark mode, échappement (HTML et Markdown), schéma/chevrons d'URI, registre inconnu | 32 |
 | `test_publish.py` | Publication (page + archive) : résolution de jeton, création/mise à jour, isolation de panne, trace par catégorie | 19 |
@@ -544,9 +575,8 @@ Point d'entrée unique : `collecter()` → `enrichir()` → `marquer_recommandat
 
 ## 11. Prochaine étape
 
-**Epic 1 est entièrement terminé** (Stories 1.1 à 1.9, toutes `done`) : le pipeline complet existe, de la collecte à la double publication (page + archive), à l'échelle réduite visée (3-5 sources). **Epic 2 est en cours** : Story 2.1 (`done`) porte le socle à 17 sources et ferme la dette `pour_le_metier` ; Story 2.2 (`done`) ferme le timeout réseau manquant de `rss_connector.py` et détecte une nuit à majorité de pannes. Reste à faire dans l'Epic 2, dans l'ordre des epics.md :
+**Epic 1 est entièrement terminé** (Stories 1.1 à 1.9, toutes `done`) : le pipeline complet existe, de la collecte à la double publication (page + archive), à l'échelle réduite visée (3-5 sources). **Epic 2 est en cours** : Story 2.1 (`done`) porte le socle à 17 sources et ferme la dette `pour_le_metier` ; Story 2.2 (`done`) ferme le timeout réseau manquant de `rss_connector.py` et détecte une nuit à majorité de pannes ; Story 2.3 (`done`) ajoute un backoff partagé sur 429. Reste à faire dans l'Epic 2 :
 
-- **Story 2.3 — Respecter le débit/backoff.** Retry/backoff sur 429/5xx, pertinent dès qu'une source comme Hacker News (Algolia) ou GitHub est interrogée nuit après nuit.
 - **Story 2.4 — Dédoublonner à l'échelle.** `dedup.py` a été conçu et testé pour 4 sources ; vérifier son comportement (performance, transitivité) à 17 sources et plus.
 - **Epic 3 — Génération nocturne automatique.** Rend le pipeline réellement autonome (ordonnancement, idempotence du job, état « déjà vu » validé après publication) — le bénéfice le plus visible au quotidien (Abdoulaye n'a plus rien à déclencher), mais suppose `store.py`/SQLite (AD-5) encore à construire. Prérequis aussi pour évaluer sur plusieurs nuits deux incertitudes trouvées en Story 2.1 (rendement réel de `pour_le_metier`, réglage du seuil Hacker News).
 - **Epic 4 — Santé des sources et découverte.** Le moins urgent tant que le socle reste petit et géré manuellement.
