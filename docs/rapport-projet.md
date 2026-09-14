@@ -8,9 +8,9 @@
 > code, pas un instantané figé. La §10 (Référence technique) en particulier
 > doit être corrigée dès qu'un fichier qu'elle décrit change de comportement.
 >
-> **Dernière mise à jour :** 2026-09-07, fin de la Story 2.3 (dev + revue).
-> **Story courante :** aucune (2.3 terminée, `done` — **Epic 2**, 3/4 stories faites).
-> **Prochaine étape :** Story 2.4 (dédoublonner à l'échelle du socle complet) — voir §11.
+> **Dernière mise à jour :** 2026-09-14, fin de la Story 2.4 (dev + revue) — **Epic 2 entièrement terminé**.
+> **Story courante :** aucune (2.4 terminée, `done`).
+> **Prochaine étape :** Epic 3 (génération nocturne automatique), Story 3.1 — voir §11.
 
 ---
 
@@ -84,7 +84,7 @@ Projet mené en méthode **BMAD** : brief → PRD → architecture → epics/sto
 | Epic | Contenu | État |
 |---|---|---|
 | **Epic 1** | Un premier digest, réel, bout en bout (3-5 sources) | ✅ **Terminé** — Stories 1.1-1.9 toutes `done` |
-| **Epic 2** | Socle élargi (15-20 sources) et robustesse aux pannes | 🟡 En cours — Stories 2.1/2.2/2.3 `done`, 2.4 à faire |
+| **Epic 2** | Socle élargi (15-20 sources) et robustesse aux pannes | ✅ **Terminé** — Stories 2.1-2.4 toutes `done` |
 | **Epic 3** | Génération nocturne automatique | ⏳ Pas commencé |
 | **Epic 4** | Santé des sources et découverte de nouvelles sources | ⏳ Pas commencé |
 
@@ -111,8 +111,9 @@ Projet mené en méthode **BMAD** : brief → PRD → architecture → epics/sto
 | 2.1 | Étendre le socle aux 15-20 sources visées | ✅ `done` | 323 → **324** |
 | 2.2 | Continuer à fonctionner quand une source tombe en panne | ✅ `done` | 324 → **335** |
 | 2.3 | Respecter les sources sensibles au débit | ✅ `done` | 335 → **350** |
+| 2.4 | Dédoublonner à l'échelle du socle complet | ✅ `done` | 350 → **353** |
 
-**Total tests actuel : 350, tous verts** (`uv run pytest`).
+**Total tests actuel : 353, tous verts** (`uv run pytest`).
 
 ## 6. Ce qui est livré, story par story
 
@@ -250,6 +251,18 @@ Nouveau module `src/veille/connectors/_reseau.py` (`get_avec_backoff`), partagé
 
 4 correctifs, 0 report, 6 rejets — dont l'absence de jitter sur le backoff (le problème qu'il résout, la contention entre clients concurrents, ne se pose pas dans une collecte strictement séquentielle) et le choix délibéré de ne pas brancher le backoff sur la requête `robots.txt`. 335 → 350 tests. Détail complet : [2-3-respecter-le-debit.md](../_bmad-output/implementation-artifacts/2-3-respecter-le-debit.md).
 
+### 6.13 — Story 2.4 : dédoublonner à l'échelle du socle complet — Epic 2 terminé
+
+Dernière story de l'Epic 2. `dedup.py` avait été conçu et testé contre un socle à 4 sources (Story 1.3) ; jamais revérifié depuis l'extension à 17 sources (Story 2.1). Cette story est une story de **vérification/durcissement**, pas de correctif : lecture complète de `dedup.py` avant tout code a confirmé que la conception (union-find sur `normaliser_url`, agnostique du type de connecteur, compression de chemin) était déjà correcte à l'échelle — seule la vérification manquait, aucune ligne de `src/veille/` n'a été touchée.
+
+Deux garde-fous ajoutés : un test réel de dédoublonnage inter-types (`rss`+`json` partageant la même URL cible, la source de plus haute priorité gagne) qui passe du premier coup ; un test de non-régression de complexité sur ~3200 items (au-dessus des ~2800 réellement collectés), largement sous un plafond de 2s. Exécution réelle chronométrée pour la première fois du projet (aucune des Stories 1.1/1.2/2.1 n'avait mesuré de durée totale, seulement des comptes d'items) : 86.30s pour les 17 sources, 0 doublon détecté — cohérent avec le relevé de la Story 2.1.
+
+**Revue de code (Sonnet 5)** — les 3 couches ont convergé sur le même constat : la couverture inter-types s'arrêtait à `rss`↔`json`, laissant `scrape` — le connecteur le plus divergent (son `guid` vaut toujours l'URL résolue, et il applique déjà sa propre déduplication intra-page) — jamais exercé dans un scénario de dédoublonnage entre deux types ; c'est aussi la seule paire que l'exécution réelle ne peut structurellement jamais observer, le socle réel ne comptant qu'une seule source `scrape`. Deuxième trouvaille, du Blind Hunter : le jeu de données du test de performance ne stressait ni la transitivité (raison d'être documentée du regroupement en classes d'équivalence, jamais exercée à l'échelle) ni l'indépendance réelle de `guid`/`url` (un défaut de l'utilitaire de test posait `guid == url`, ce qu'aucune vraie source ne fait) — reconstruit avec des chaînes à 3 membres et des identités indépendantes.
+
+5 correctifs, 0 report, 4 rejets — dont l'absence de script/log committé pour l'exécution réelle (même patron non remis en cause depuis les Stories 1.1/1.2/2.1/2.2/2.3) et le seuil de temps codé en dur (marge déjà considérable, ~200× sous le plafond mesuré). 350 → 353 tests. Détail complet : [2-4-dedoublonner-a-l-echelle.md](../_bmad-output/implementation-artifacts/2-4-dedoublonner-a-l-echelle.md).
+
+**Epic 2 est maintenant entièrement terminé** (Stories 2.1 à 2.4, toutes `done`) : socle à 17 sources, isolation de panne durcie (timeout RSS, détection d'anomalie majoritaire), backoff sur limite de débit, dédoublonnage revérifié à l'échelle.
+
 ## 7. Journal des décisions structurantes (cumulatif)
 
 Ce journal ne répète pas le détail des stories (§6) ; il ne garde que ce qui **contraint les stories suivantes**.
@@ -293,6 +306,7 @@ Ce journal ne répète pas le détail des stories (§6) ; il ne garde que ce qui
 37. **Une valeur fournie par un tiers (en-tête HTTP, config externe) doit être validée sur sa plausibilité, pas seulement sur son type** — `float("inf")`/`float("1e300")` sont des valeurs Python parfaitement valides, mais `time.sleep()` plante sur la première et la seconde immobiliserait le run pour une durée déraisonnable ; `isinstance`/`try-except ValueError` ne suffisent pas à eux seuls, il faut aussi une borne explicite (`math.isfinite` + plafond) quand la donnée pilote une attente ou une ressource. Distinct de la leçon #14 (fraîcheur de la vérification) et de la #36 (ce qu'elle mesure) : ici, c'est la **plage de validité** qui manquait, pas la présence d'un contrôle (Story 2.3, trouvé en revue — confirmé empiriquement par l'Edge Case Hunter, qui a reproduit le plantage).
 38. **Un mécanisme neuf partagé par plusieurs points d'appel doit être vérifié de bout en bout à travers chacun, pas seulement à travers le premier qui vient à l'esprit** — le backoff de la Story 2.3 était exhaustivement testé en isolation (`_reseau.py`) et à travers `rss_connector.py`, mais jamais à travers `json_connector.py`/`scrape_connector.py`, alors que l'AC affirmait explicitement le mécanisme « partagé par les trois connecteurs ». Une couverture unitaire complète du composant partagé ne remplace pas une couverture d'intégration par appelant (Story 2.3, trouvé en revue — convergence Blind Hunter + Acceptance Auditor).
 39. **Un test qui ne fonctionne que grâce à un détail d'implémentation non garanti (ici : que deux modules important la même bibliothèque partagent le même objet singleton) doit cibler directement le point où l'effet a lieu, pas un raccourci qui marche par accident aujourd'hui** — les tests d'intégration ajoutés en Story 2.3 monkeypatchaient `rss_connector.httpx` en s'appuyant implicitement sur le fait que `httpx` est un module `sys.modules` partagé avec `_reseau.py` ; reciblés sur `_reseau.httpx` directement, la référence réellement appelée. Les tests **existants** de la Story 2.2, eux, continuent légitimement de s'appuyer sur ce couplage (documenté, vérifié, nécessaire pour ne pas les modifier) — la distinction est entre *découvrir* qu'un raccourci fonctionne et *choisir délibérément* de le garder pour une raison précise (Story 2.3, trouvé en revue).
+40. **Un test « à l'échelle » doit stresser la propriété qui justifie le choix de conception, pas seulement son volume** — le jeu de données du test de performance de `dedupliquer()` (Story 2.4) posait `guid == url` par défaut (commodité de l'utilitaire de test) et ne liait les classes que par paires ; or la raison d'être documentée de l'union-find (plutôt qu'une comparaison par paires) est précisément la transitivité (« A et B partagent une URL, B et C un guid, donc A, B, C sont le même article »), jamais exercée à volume avant cette story. Un grand nombre d'items qui passent tous par le même chemin dégénéré (paires simples, un seul signal d'identité) ne prouve rien sur le chemin qui a motivé la conception (Story 2.4, trouvé en revue).
 
 ## 8. Dette technique et travail reporté
 
@@ -305,6 +319,8 @@ Liste vivante complète : [deferred-work.md](../_bmad-output/implementation-arti
 **Dette fermée en Story 2.2** : ~~timeout réseau absent sur `feedparser`/`rss_connector.py`~~ — `TIMEOUT_SECONDES = 30` + `User-Agent` explicite ajoutés (même patron que les deux autres connecteurs) ; ~~une panne HTTP sur une source RSS est avalée par `bozo`, remonte comme « muette » plutôt qu'« échec »~~ — corrigé, `RapportSource.echec` porte désormais la vraie cause.
 
 **Dette fermée en Story 2.3** : ~~retry/backoff sur 429~~ — `src/veille/connectors/_reseau.py` (`get_avec_backoff`), partagé par les trois connecteurs.
+
+**Dette fermée en Story 2.4** : ~~`dedup.py` jamais revérifié à l'échelle du socle à 17 sources (conçu/testé contre 4 sources, Story 1.3)~~ — conception confirmée déjà correcte (aucun changement de code), verrouillée par un garde-fou de non-régression de complexité (~3200 items, transitivité comprise) et une exécution réelle chronométrée pour la première fois du projet (86.30s, 17 sources, 0 doublon).
 
 **Trouvé en Story 2.2, reporté** :
 - **`httpx.get(..., follow_redirects=True)` n'impose aucune limite au nombre/à la durée totale des sauts de redirection**, sur les trois connecteurs (`json_connector.py`, `scrape_connector.py`, `rss_connector.py` depuis cette story). Le `timeout` de 30s borne chaque opération réseau, pas la chaîne complète de redirections d'une même source — atténue partiellement l'objectif « ne doit plus pouvoir bloquer indéfiniment ». Motif préexistant aux 3 connecteurs, pas introduit par cette story.
@@ -339,7 +355,7 @@ Liste vivante complète : [deferred-work.md](../_bmad-output/implementation-arti
 - le `.git` était resté à la racine de `Projets_Perso/` (englobant à tort `Saas_chatbots/`, un projet distinct) — déplacé dans `Agent_veille_tech/.git` pour que ce dossier soit son propre dépôt, aligné sur le remote `petitlaye03/Agent_Veille_Tech` ;
 - `.venv` était un venv Windows inutilisable (`home = C:\Program Files\Python311`) — supprimé et reconstruit avec `uv sync` (`uv` installé via Homebrew, absent du Mac).
 
-**État actuel** : dépôt propre (Stories 1.4 à 1.9 committées et poussées — Epic 1 entièrement terminé ; Stories 2.1/2.2/2.3 committées et poussées — Epic 2 en cours). Aucun commit n'est fait automatiquement — décision du 2026-08-27 : les commits restent à la demande explicite d'Abdoulaye. Les dossiers `_bmad/`, `.claude/`, `_bmad-output/` sont suivis par git depuis le 2026-08-28 (réintégrés une fois le dépôt confirmé privé et le contenu relu — voir commit dédié entre les Stories 1.7 et 1.8).
+**État actuel** : dépôt propre (Stories 1.4 à 1.9 committées et poussées — Epic 1 entièrement terminé ; Stories 2.1 à 2.4 committées et poussées — **Epic 2 entièrement terminé**). Convention établie depuis la Story 1.4 : chaque story terminée (dev + revue) est commitée et poussée dans la foulée (implémentation+revue, puis rapport de projet en commit séparé), sans confirmation supplémentaire par story. Les dossiers `_bmad/`, `.claude/`, `_bmad-output/` sont suivis par git depuis le 2026-08-28 (réintégrés une fois le dépôt confirmé privé et le contenu relu — voir commit dédié entre les Stories 1.7 et 1.8).
 
 **Secrets** : `ANTHROPIC_API_KEY` (`.env`, voir `.env.example`) — nécessaire pour que `enrich/llm.py` génère de vraies accroches. Aucune clé fournie à ce jour. `GITHUB_TOKEN` (Story 1.8, optionnel) — `publish.py` réutilise en repli la session `gh` déjà authentifiée localement (`gh auth token`) si cette variable est absente.
 
@@ -455,6 +471,7 @@ Les trois connecteurs partagent le contrat `fetch(source_config: SourceConfig) -
 - **`normaliser_url(url)`** — canonicalise une URL : neutralise schéma, `www.`, port par défaut, barre oblique finale, fragment, encodage-pourcent, et une liste de paramètres de suivi (`PARAMETRES_DE_SUIVI` : `utm_*`, `fbclid`, `gclid`…). **Conserve** les autres paramètres de requête — sur certains sites `?id=42` est l'identité même de l'article. Ne lève jamais (hors isolation de panne) : une URL illisible retourne `""`, l'item retombant sur son `guid`.
 - **`dedupliquer(items, priorites)`** — identité par union-find : chaque item porte une ou plusieurs clés (URL normalisée, `(source_id, guid)`), unies entre elles pour que la relation reste transitive. Un gagnant est élu par classe d'équivalence (priorité la plus haute, puis position la plus ancienne), l'ordre global suit la première apparition — **indépendant de l'ordre d'arrivée**.
 - **`RapportDedoublonnage`** — compte les perdants **et** les gagnants par source (savoir qui absorbe est aussi important que savoir qui est absorbé).
+- **Revérifié à l'échelle du socle à 17 sources par la Story 2.4** (conçu/testé à l'origine contre 4 sources, Story 1.3) : aucune ligne de ce fichier modifiée — la conception (union-find, compression de chemin) tenait déjà. Garde-fou de non-régression de complexité ajouté (`tests/test_dedup.py::TestPerformanceAEchelle`, ~3200 items dont des chaînes transitives à 3 membres, sous 2s) et dédoublonnage inter-types (`rss`↔`json`, `rss`↔`scrape`) verrouillé par des tests réels (`tests/test_collecte_integration.py`).
 
 ### 10.6 `src/veille/profil.py` — chargement et analyse de `profil.md` (FR-5)
 
@@ -550,7 +567,7 @@ Point d'entrée unique : `collecter()` → `enrichir()` → `marquer_recommandat
 
 ### 10.14 Tests
 
-350 tests, aucun appel réseau ni subprocess réel dans la suite automatisée (fixtures locales, clients simulés, `httpx.get`/`time.sleep` monkeypatchés, résolution de jeton monkeypatchée) — seules les Tasks 2/4 des Stories 2.1/2.2 ont fait des exécutions réelles ponctuelles, hors suite `pytest`, documentées dans leurs Dev Agent Record respectifs. `tests/conftest.py` neutralise `profil.md`/`scoring.yaml`/`quotas.yaml` par défaut pour tous les tests (fixture `autouse`), afin qu'aucun test ne dépende implicitement de la configuration de production.
+353 tests, aucun appel réseau ni subprocess réel dans la suite automatisée (fixtures locales, clients simulés, `httpx.get`/`time.sleep` monkeypatchés, résolution de jeton monkeypatchée) — seules certaines Tasks des Stories 2.1/2.2/2.4 ont fait des exécutions réelles ponctuelles, hors suite `pytest`, documentées dans leurs Dev Agent Record respectifs. `tests/conftest.py` neutralise `profil.md`/`scoring.yaml`/`quotas.yaml` par défaut pour tous les tests (fixture `autouse`), afin qu'aucun test ne dépende implicitement de la configuration de production.
 
 | Fichier | Périmètre | Tests |
 |---|---|---|
@@ -560,7 +577,7 @@ Point d'entrée unique : `collecter()` → `enrichir()` → `marquer_recommandat
 | `test_rss_connector.py` | Connecteur RSS — timeout/statut HTTP explicites, dispatch réseau vs local, encodage (Story 2.2) | 12 |
 | `test_json_connector.py` | Connecteur JSON, extraction du signal | 8 |
 | `test_scrape_connector.py` | Connecteur scraping, `robots.txt` | 9 |
-| `test_dedup.py` | Dédoublonnage unitaire | 20 |
+| `test_dedup.py` | Dédoublonnage unitaire + garde-fou de non-régression de complexité à l'échelle (Story 2.4, transitivité comprise) | 21 |
 | `test_dedup_regressions.py` | Régressions de la revue Story 1.3 | 18 |
 | `test_profil.py` | Parseur de profil, robustesse aux éditions manuelles | 28 |
 | `test_filter.py` | Signal, scoring, quotas, marge de recommandation — le plus gros fichier | 69 |
@@ -568,17 +585,16 @@ Point d'entrée unique : `collecter()` → `enrichir()` → `marquer_recommandat
 | `test_collect.py` | `run()`, cas d'erreur de haut niveau, `resultats_repartis` | 10 |
 | `test_rapport_collecte.py` | Observabilité (`RapportSource`, états muette/échec, anomalie de pannes réseau — Story 2.2 ; backoff 429 de bout en bout sur les 3 connecteurs — Story 2.3) | 15 |
 | `test_reseau.py` | Backoff HTTP partagé sur 429 (`_reseau.get_avec_backoff`) — Story 2.3 | 11 |
-| `test_collecte_integration.py` | **Chemin réel** config → `collecter()` → rapport, pour chaque mécanisme | 25 |
+| `test_collecte_integration.py` | **Chemin réel** config → `collecter()` → rapport, pour chaque mécanisme, dédoublonnage inter-types compris (`rss`↔`json`, `rss`↔`scrape` — Story 2.4) | 27 |
 | `test_render.py` | Rendu HTML + Markdown : sections, palette, dark mode, échappement (HTML et Markdown), schéma/chevrons d'URI, registre inconnu | 32 |
 | `test_publish.py` | Publication (page + archive) : résolution de jeton, création/mise à jour, isolation de panne, trace par catégorie | 19 |
 | `test_pipeline.py` | Orchestrateur : chemin complet (page + archive), dégradation sans clé/jeton, filet de sécurité, corrélation contenu↔chemin | 6 |
 
 ## 11. Prochaine étape
 
-**Epic 1 est entièrement terminé** (Stories 1.1 à 1.9, toutes `done`) : le pipeline complet existe, de la collecte à la double publication (page + archive), à l'échelle réduite visée (3-5 sources). **Epic 2 est en cours** : Story 2.1 (`done`) porte le socle à 17 sources et ferme la dette `pour_le_metier` ; Story 2.2 (`done`) ferme le timeout réseau manquant de `rss_connector.py` et détecte une nuit à majorité de pannes ; Story 2.3 (`done`) ajoute un backoff partagé sur 429. Reste à faire dans l'Epic 2 :
+**Epic 1 et Epic 2 sont entièrement terminés.** Epic 1 (Stories 1.1-1.9) : le pipeline complet existe, de la collecte à la double publication (page + archive), à l'échelle réduite visée (3-5 sources). Epic 2 (Stories 2.1-2.4) : socle porté à 17 sources, isolation de panne durcie sur les 3 connecteurs (timeout, détection d'anomalie majoritaire, backoff sur 429), dédoublonnage revérifié à l'échelle. Reste dans le passé, plus rien à faire dans l'Epic 2.
 
-- **Story 2.4 — Dédoublonner à l'échelle.** `dedup.py` a été conçu et testé pour 4 sources ; vérifier son comportement (performance, transitivité) à 17 sources et plus.
-- **Epic 3 — Génération nocturne automatique.** Rend le pipeline réellement autonome (ordonnancement, idempotence du job, état « déjà vu » validé après publication) — le bénéfice le plus visible au quotidien (Abdoulaye n'a plus rien à déclencher), mais suppose `store.py`/SQLite (AD-5) encore à construire. Prérequis aussi pour évaluer sur plusieurs nuits deux incertitudes trouvées en Story 2.1 (rendement réel de `pour_le_metier`, réglage du seuil Hacker News).
+- **Epic 3 — Génération nocturne automatique (prochaine étape choisie).** Rend le pipeline réellement autonome (ordonnancement, idempotence du job, état « déjà vu » validé après publication) — le bénéfice le plus visible au quotidien (Abdoulaye n'a plus rien à déclencher), mais suppose `store.py`/SQLite (AD-5) encore à construire. Prérequis aussi pour évaluer sur plusieurs nuits deux incertitudes trouvées en Story 2.1 (rendement réel de `pour_le_metier`, réglage du seuil Hacker News).
 - **Epic 4 — Santé des sources et découverte.** Le moins urgent tant que le socle reste petit et géré manuellement.
 
 **Avant l'un ou l'autre, ou en parallèle** : créer le second dépôt GitHub public de sortie et y activer GitHub Pages (+ `.nojekyll`) — seule chose qui manque pour valider `publish.py` (page et archive) contre l'API réelle plutôt qu'en dégradation simulée. Et dès qu'une clé `ANTHROPIC_API_KEY` sera fournie : valider `enrich/llm.py` contre l'API véritable (langue, longueur, coût mesuré) — déjà branché dans un run réel depuis la Story 1.8, seule la validation manque.
