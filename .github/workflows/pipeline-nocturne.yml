@@ -1,0 +1,96 @@
+# Déclencheur nocturne du pipeline (Story 3.1, FR-11).
+#
+# Amendement d'architecture : le PRD/ARCHITECTURE-SPINE.md prévoyaient le
+# Planificateur de tâches Windows sur le PC d'Abdoulaye, avec un repli déjà
+# documenté vers GitHub Actions « si le PC allumé la nuit devient une
+# contrainte ». Le PC de dev a migré vers Mac (2026-08-27) ; ce repli est
+# devenu le choix retenu (confirmé par Abdoulaye le 2026-09-14) — aucune
+# machine à laisser allumée le soir.
+#
+# Prérequis réels avant que ce workflow puisse réussir (voir Dev Notes de
+# la story 3.1, non résolus par cette story elle-même) :
+#   - secret ANTHROPIC_API_KEY (sinon enrich/llm.py dégrade : titres en repli)
+#   - secret DIGEST_PUBLISH_TOKEN, un jeton d'accès personnel avec droit
+#     d'écriture sur le dépôt de sortie (petitlaye03/agent-veille-tech-digest)
+#     — le secrets.GITHUB_TOKEN fourni nativement par Actions est scopé au
+#     dépôt courant (Agent_Veille_Tech), pas au dépôt de sortie
+#   - le dépôt de sortie lui-même doit exister (sinon publish.py dégrade :
+#     rien n'est publié, sans planter)
+#
+# Risque connu, non contournable par la configuration de ce fichier (trouvé
+# en revue) : GitHub désactive silencieusement un déclencheur `schedule`
+# après 60 jours sans activité de commit sur le dépôt — aucun run, aucune
+# erreur visible nulle part. `workflow_dispatch` reste fonctionnel dans ce
+# cas ; à surveiller si le dépôt reste inactif longtemps (voir
+# deferred-work.md).
+
+name: Pipeline nocturne
+
+on:
+  schedule:
+    # 22h17 heure de Dakar = 22h17 UTC (Dakar n'observe aucun changement
+    # d'heure). Décalé de l'heure ronde (trouvé en revue) : GitHub
+    # documente le sommet de chaque heure comme la fenêtre la plus chargée
+    # pour les déclencheurs schedule, donc la plus sujette au retard —
+    # marge de 9h20 jusqu'à l'échéance de 7h38 largement suffisante pour
+    # absorber ce risque documenté.
+    - cron: "17 22 * * *"
+  workflow_dispatch: {}
+
+# Un run manuel (workflow_dispatch, pour valider/déboguer) qui chevaucherait
+# le run programmé ferait courir les deux vers le même upsert par `sha` sur
+# le dépôt de sortie (publish.py) — l'un des deux échouerait sur un `sha`
+# devenu obsolète. Un seul run à la fois pour ce pipeline (trouvé en revue).
+concurrency:
+  group: pipeline-nocturne
+  cancel-in-progress: false
+
+# Lecture seule sur le dépôt courant : ce job n'a besoin d'écrire nulle part
+# ici (les écritures réelles visent le dépôt de sortie, via le jeton dédié
+# DIGEST_PUBLISH_TOKEN ci-dessous, pas le jeton ambiant de ce job).
+permissions:
+  contents: read
+
+jobs:
+  executer-le-pipeline:
+    runs-on: ubuntu-latest
+    # Filet de sécurité (trouvé en revue) : sans plafond, un run bloqué
+    # (réseau, source qui ne répond jamais) pourrait occuper le plafond
+    # par défaut de GitHub Actions (plusieurs heures) avant d'être annulé —
+    # le risque même que la dette « budget de temps global » de
+    # rapport-projet.md §8 documente déjà pour ce pipeline.
+    timeout-minutes: 30
+    steps:
+      # Épinglé au commit du tag v4 plutôt qu'au tag flottant lui-même
+      # (trouvé en revue) : ce job manipule un jeton à droits d'écriture
+      # sur un second dépôt (DIGEST_PUBLISH_TOKEN) — un tag mutable
+      # re-pointé (compromission ou erreur en amont) s'exécuterait avec ce
+      # jeton sans qu'aucun changement n'apparaisse dans ce fichier.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Installer uv
+        # Pas de `python-version:` ici (trouvé en revue) : `.python-version`
+        # à la racine du dépôt (3.11, cohérent avec pyproject.toml) est déjà
+        # lu automatiquement par uv — le répéter ici aurait créé une
+        # deuxième source de vérité à resynchroniser manuellement.
+        uses: astral-sh/setup-uv@e4db8464a088ece1b920f60402e813ea4de65b8f # v4
+
+      - name: Installer les dépendances
+        # --locked (pas --frozen) : échoue explicitement si uv.lock a
+        # dérivé de pyproject.toml, plutôt que d'installer silencieusement
+        # un verrou périmé — le choix documenté par uv pour la CI (trouvé
+        # en revue).
+        run: uv sync --locked
+
+      - name: Exécuter le pipeline
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Mappé sur GITHUB_TOKEN (nom attendu par publish.py, inchangé) :
+          # le secret réservé secrets.GITHUB_TOKEN natif d'Actions ne
+          # suffirait pas, voir en-tête de ce fichier. Volontairement scopé
+          # à ce seul step (pas au job entier) : un futur step ajouté à ce
+          # job ne verra pas ce jeton à moins de le redéclarer
+          # explicitement ici, pour éviter qu'il ne soit confondu par
+          # inadvertance avec le jeton ambiant que son nom évoque d'habitude.
+          GITHUB_TOKEN: ${{ secrets.DIGEST_PUBLISH_TOKEN }}
+        run: uv run python -m veille.pipeline

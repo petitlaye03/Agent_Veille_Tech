@@ -1,5 +1,9 @@
 # Travail différé
 
+## Deferred from: code review of 3-1-declencher-automatiquement (2026-09-14)
+
+- **GitHub désactive silencieusement un déclencheur `schedule` après 60 jours sans activité de commit sur le dépôt** (`.github/workflows/pipeline-nocturne.yml`). Aucun run, aucune erreur visible nulle part — seul `workflow_dispatch` resterait fonctionnel. Le dépôt reste actif tant que des stories BMAD y sont développées, mais devient un vrai risque dès que le rythme de commits ralentit durablement (toutes les stories planifiées terminées, par exemple). Pas de contournement propre par la configuration seule : une « fausse » activité périodique (commit vide programmé) serait un artifice plus fragile que le problème qu'il résout. À surveiller manuellement, ou à résoudre par une story dédiée si le rythme de commits de ce dépôt devient réellement irrégulier.
+
 ## Deferred from: code review of 2-2-continuer-en-panne (2026-09-02)
 
 - **`httpx.get(..., follow_redirects=True)` n'impose aucune limite au nombre/à la durée totale des sauts de redirection**, sur les trois connecteurs (`json_connector.py`, `scrape_connector.py`, et depuis la Story 2.2, `rss_connector.py`). Le `timeout` déclaré (30s) borne chaque opération réseau, mais une source qui chaînerait de nombreuses redirections successives (chacune sous les 30s) pourrait faire durer la récupération d'une seule source bien au-delà de ce que le paramètre `TIMEOUT_SECONDES` laisse penser — atténuant partiellement l'objectif de la Story 2.2 (« ne doit plus pouvoir bloquer indéfiniment tout le run ») pour ce cas précis. Pas spécifique à cette story (le motif existait déjà, identique, dans les deux autres connecteurs depuis la Story 1.2) — reporté à une story dédiée à la robustesse réseau si le besoin se confirme (`httpx.Client(max_redirects=...)` explicite). (`src/veille/connectors/json_connector.py`, `scrape_connector.py`, `rss_connector.py`)
