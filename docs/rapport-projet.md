@@ -8,9 +8,9 @@
 > code, pas un instantané figé. La §10 (Référence technique) en particulier
 > doit être corrigée dès qu'un fichier qu'elle décrit change de comportement.
 >
-> **Dernière mise à jour :** 2026-09-14, fin de la Story 3.1 (dev + revue) — **Epic 3 démarré**.
-> **Story courante :** aucune (3.1 terminée, `done`).
-> **Prochaine étape :** Story 3.2 (reprendre proprement après un échec) — voir §11.
+> **Dernière mise à jour :** 2026-09-14, fin de la Story 3.2 (dev + revue).
+> **Story courante :** aucune (3.2 terminée, `done`).
+> **Prochaine étape :** Story 3.3 (relancer sans jamais dupliquer) — voir §11.
 
 ---
 
@@ -85,7 +85,7 @@ Projet mené en méthode **BMAD** : brief → PRD → architecture → epics/sto
 |---|---|---|
 | **Epic 1** | Un premier digest, réel, bout en bout (3-5 sources) | ✅ **Terminé** — Stories 1.1-1.9 toutes `done` |
 | **Epic 2** | Socle élargi (15-20 sources) et robustesse aux pannes | ✅ **Terminé** — Stories 2.1-2.4 toutes `done` |
-| **Epic 3** | Génération nocturne automatique | 🟡 En cours — Story 3.1 `done`, 3.2/3.3/3.4 à faire |
+| **Epic 3** | Génération nocturne automatique | 🟡 En cours — Stories 3.1/3.2 `done`, 3.3/3.4 à faire |
 | **Epic 4** | Santé des sources et découverte de nouvelles sources | ⏳ Pas commencé |
 
 ### Détail Epic 1
@@ -120,6 +120,9 @@ Projet mené en méthode **BMAD** : brief → PRD → architecture → epics/sto
 | Story | Titre | Statut | Tests |
 |---|---|---|---|
 | 3.1 | Déclencher le pipeline automatiquement chaque nuit | ✅ `done` | 353 (inchangé — workflow YAML, pas de code Python) |
+| 3.2 | Reprendre proprement après un échec, sans perdre d'items | ✅ `done` | 353 → **373** |
+
+**Total tests actuel : 373, tous verts** (`uv run pytest`).
 
 ## 6. Ce qui est livré, story par story
 
@@ -281,6 +284,16 @@ Nouveau fichier `.github/workflows/pipeline-nocturne.yml` : déclencheur `cron` 
 
 **Limite assumée, comme pour `publish.py`/`enrich/llm.py` depuis l'Epic 1** : ce workflow ne peut pas être validé par une exécution programmée réellement réussie tant que les secrets du dépôt (`ANTHROPIC_API_KEY`, `DIGEST_PUBLISH_TOKEN`) n'ont pas été ajoutés et que le dépôt de sortie public n'existe pas — trois actions réelles sous le compte d'Abdoulaye, différées, à confirmer explicitement avant exécution.
 
+### 6.15 — Story 3.2 : reprendre proprement après un échec, sans perdre d'items
+
+Deuxième story de l'Epic 3. Lecture complète de `pipeline.executer()` avant tout code a confirmé une garantie déjà vraie **sans aucun changement** : l'orchestrateur enchaîne `collecter()` → `enrichir()` → `rendre()` → `publier()` dans un ordre séquentiel strict, enveloppé d'un filet de sécurité de dernier recours — un échec à n'importe quelle étape avant `publier()` fait que `publier()` n'est jamais atteint, donc la page publiée les nuits précédentes reste intacte par construction. Cette story verrouille cette garantie par 3 nouveaux tests réels (forcer `collecter`/`enrichir`/`rendre` à lever, confirmer que `publier`/`publier_archive` ne sont jamais appelés), sans toucher à `pipeline.py` pour ce point précis.
+
+**Nouveauté réelle** : un bandeau honnête sur la page publiée quand une nuit échoue. Problème d'architecture à résoudre d'abord : un run qui échoue avant `rendre()` n'a par définition aucune `Entree` à rendre — le bandeau ne peut donc pas passer par le chemin Jinja2 normal, il doit patcher après coup le HTML déjà publié. Solution : `render.rendre_bandeau_echec()` produit un fragment délimité par des marqueurs stables (`<!-- BANDEAU-ECHEC:DEBUT/FIN -->`), `publish.publier_bandeau_echec()` lit la page publiée, insère ou **remplace** le bandeau entre marqueurs (idempotence — deux nuits d'échec consécutives ne doivent jamais en empiler deux), republie par le même upsert par `sha` que le reste du module. `pipeline.main_bandeau_echec()` (nouveau point d'entrée CLI, `--bandeau-echec`) est invoqué par un nouveau step du workflow de la Story 3.1, jamais par `executer()`/`main()` eux-mêmes.
+
+**Revue de code (Sonnet 5)** — les 3 couches ont convergé indépendamment sur le constat le plus sérieux : `if: failure()` ne se déclenche **pas** quand `timeout-minutes` annule un job (GitHub Actions distingue `cancelled` de `failed`) — précisément le seul scénario d'infrastructure que l'AC nommait explicitement (« timeout »). Corrigé (`if: failure() || cancelled()`). Deux autres trouvailles réelles, vérifiées par reproduction : `re.sub` interprète les antislashs d'une chaîne de remplacement brute (`\1`, `\g<0>`) — un bandeau qui en contiendrait aurait pu lever ou corrompre le HTML publié, corrigé par une fonction de remplacement plutôt qu'une chaîne ; et `main_bandeau_echec` traitait « aucune page à annoter » (cas que la docstring de `publier_bandeau_echec` documentait pourtant explicitement comme « pas une panne ») exactement comme un vrai échec — corrigé en donnant à `publier_bandeau_echec` un retour à trois états (`True`/`False`/`None`) plutôt qu'un simple booléen. Trouvailles de qualité supplémentaires corrigées : la garde `sha` incohérente avec `_publier()` (envoyait `"sha": null` explicite), l'insertion après `<body>` qui ratait toute balise avec attributs, le repli « pas de `<body>` » jamais testé, une affirmation de réutilisation de code fausse dans les Dev Notes (corrigée en factorisant réellement `_charge_existante`, désormais partagée par `_sha_existant` et le nouveau code), et un bandeau au format de date/couleurs incohérent avec le reste du site (corrigé : `%d/%m/%Y`, variables CSS thématisées clair/sombre déjà en place).
+
+10 correctifs, 0 report, 4 rejets — dont le calcul indépendant de la date du jour plutôt que l'horodatage exact du run (structurellement quasi inatteignable avec le `cron` fixé à 22h17 UTC et un plafond de 30 min) et un risque de compétition déjà couvert par le `concurrency` group de la Story 3.1. 353 → 373 tests. Détail complet : [3-2-reprendre-apres-echec.md](../_bmad-output/implementation-artifacts/3-2-reprendre-apres-echec.md).
+
 ## 7. Journal des décisions structurantes (cumulatif)
 
 Ce journal ne répète pas le détail des stories (§6) ; il ne garde que ce qui **contraint les stories suivantes**.
@@ -328,6 +341,9 @@ Ce journal ne répète pas le détail des stories (§6) ; il ne garde que ce qui
 41. **Un amendement d'architecture reste nécessaire même quand le changement « semble » cosmétique (un déclencheur, pas une règle)** — le PRD/`ARCHITECTURE-SPINE.md` prévoyaient le Planificateur Windows ; la migration Mac (§9) l'a rendu obsolète. L'architecture avait heureusement déjà anticipé ce cas précis (repli GitHub Actions documenté à l'avance) — mais la story elle-même (Story 3.1) a quand même dû trancher explicitement avec Abdoulaye plutôt que de supposer le repli déjà « automatiquement » applicable : un amendement anticipé dans la documentation n'équivaut pas à une décision prise, seulement à une option préparée (Story 3.1).
 42. **Un jeton nommé comme le jeton ambiant d'une plateforme, mais porteur de droits différents, doit rester scopé au plus petit périmètre possible** — le workflow de la Story 3.1 mappe un PAT personnel à droits d'écriture cross-repo sur la variable `GITHUB_TOKEN` (le nom que `publish.py` attend déjà, inchangé), alors que ce nom désigne d'ordinaire le jeton ambiant, plus faible, fourni nativement par GitHub Actions. Scopé au seul step qui en a besoin (pas au job entier) : un futur step ajouté au même job n'hérite de rien tant qu'il ne redéclare pas explicitement ce nom — la réutilisation du nom reste un piège nommé, mais son rayon d'action est contenu par construction (Story 3.1, trouvé en revue).
 43. **Un job CI qui manipule un secret à portée élargie (écriture sur un autre dépôt) mérite un durcissement au-delà du strict nécessaire fonctionnel** — épingler les actions tierces par SHA de commit plutôt que par tag flottant, un bloc `permissions` explicite en moindre privilège, un `concurrency` group et un `timeout-minutes` n'étaient demandés par aucun AC de la Story 3.1, mais découlent directement de la présence d'un jeton à droits d'écriture cross-repo dans ce job — le niveau de rigueur attendu d'un composant dépend de ce qu'il peut faire de mal, pas seulement de ce qu'on lui demande de faire de bien (Story 3.1, trouvé en revue, 3 couches convergentes sur `concurrency`/`timeout-minutes`).
+44. **`failure()` et `cancelled()` sont deux conclusions distinctes dans GitHub Actions — un step conditionné sur l'un des deux seuls rate l'autre** — `timeout-minutes` fait *annuler* un job (`cancelled`), pas échouer (`failed`) ; un step `if: failure()` ne se déclenche donc jamais sur un timeout, y compris quand ce timeout est précisément le scénario que ce step est censé couvrir. Leçon de plateforme, pas de code Python — mais avec la même gravité qu'un bug applicatif si elle passe inaperçue (Story 3.2, trouvé en revue, convergence des 3 couches).
+45. **Une fonction de remplacement dans `re.sub` doit être une fonction, pas une chaîne, dès que le texte de remplacement n'est pas garanti sans antislash** — `re.sub(motif, chaine, texte)` interprète `\1`/`\g<0>` dans `chaine` comme des références de groupe, pas du texte littéral ; `re.sub(motif, lambda m: chaine, texte)` ne le fait jamais. Un piège d'API standard, pas propre à ce projet, mais qui aurait pu corrompre silencieusement une page publiée (Story 3.2, trouvé en revue, reproduit).
+46. **Un retour booléen qui confond deux causes distinctes (« panne réelle » et « rien à faire, normalement ») force l'appelant à les traiter pareil** — `publier_bandeau_echec` renvoyait `False` aussi bien pour une vraie panne HTTP que pour « aucune page à annoter, première nuit » (déjà distingué dans sa propre docstring) — `main_bandeau_echec` n'avait donc aucun moyen de ne pas transformer un cas normal en run rouge. Corrigé par un retour à trois états (`True`/`False`/`None`) plutôt que de complexifier l'appelant pour deviner la cause depuis un log. Même famille que la leçon #13 (dégrader en conservant, jamais en confondant deux états différents) (Story 3.2, trouvé en revue).
 
 ## 8. Dette technique et travail reporté
 
@@ -338,6 +354,10 @@ Liste vivante complète : [deferred-work.md](../_bmad-output/implementation-arti
 **Trouvé en Story 3.1, reporté** :
 - **GitHub désactive silencieusement un déclencheur `schedule` après 60 jours sans activité de commit sur le dépôt** — aucun run, aucune erreur visible nulle part (`workflow_dispatch` reste fonctionnel). Pas de contournement propre par la configuration du workflow seule. À surveiller si le rythme de commits ralentit durablement.
 - **Trois prérequis réels non résolus avant que `pipeline-nocturne.yml` puisse réussir en conditions réelles** : secrets `ANTHROPIC_API_KEY`/`DIGEST_PUBLISH_TOKEN` non créés, dépôt de sortie public toujours inexistant — mêmes actions réelles déjà différées depuis l'Epic 1 (§9).
+
+**Trouvé en Story 3.2, reporté (limite acceptée, pas un correctif manquant)** :
+- **`pipeline.main_bandeau_echec` calcule la date du jour indépendamment de l'horodatage réel du run échoué** (`datetime.now(timezone.utc).date()`) — un run qui franchirait minuit UTC entre son déclenchement et l'échec afficherait la mauvaise nuit sur le bandeau. Structurellement quasi inatteignable avec le `cron` actuel (22h17 UTC, plafond de 30 min — le step d'échec s'exécute au plus tard vers 22h47 UTC) ; resterait atteignable via un `workflow_dispatch` manuel déclenché très près de minuit suivi d'un quasi-timeout complet. Pas corrigé : passer l'horodatage exact du run à travers le contexte GitHub Actions serait disproportionné pour ce risque résiduel.
+- **`publier_bandeau_echec`/`_publier` partagent maintenant `_charge_existante` mais pas encore toute la boilerplate de résolution de client/`try`/`finally`** — réduction de duplication partielle, acceptée : les deux fonctions ont une forme différente (écrire un contenu déjà en main vs lire-puis-patcher) qui ne se laisse pas réduire à un appelant commun sans complexifier `_publier()` pour un seul appelant supplémentaire.
 
 **Dette fermée en Story 2.1** : ~~`config/sources.yaml` ne déclare aucune source en registre `pour_le_metier`~~ — 2 sources ajoutées (`decideo`, `lemonde-informatique`), la 3ᵉ section du digest reçoit désormais des items réels.
 
@@ -557,6 +577,7 @@ Regroupe les `Entree` par registre et produit la page publiée (HTML) et l'archi
 - **`_environnement_jinja_markdown() -> Environment`** (Story 1.9) — environnement **séparé** de `_environnement_jinja()`, `autoescape=False`, filtre `markdown_safe` = `_echapper_markdown`. Piège évité : `digest.md.j2` se termine aussi par `.j2`, donc réutiliser le premier environnement aurait appliqué l'autoescape HTML (entités `&amp;` erronées) à un fichier Markdown.
 - **`rendre(entrees, date_generation) -> str`** — rend `digest.html.j2`. Titre vide → repli sur l'accroche ; URL vide/schéma refusé/chevrons → pas de lien cliquable.
 - **`rendre_markdown(entrees, date_generation) -> str`** (Story 1.9) — rend `digest.md.j2` ; mêmes garde-fous que `rendre()`, plus l'échappement Markdown et l'enveloppe `<...>` des liens (une URL avec parenthèses, ex. Wikipédia, casserait `[texte](url)` sans elle).
+- **`rendre_bandeau_echec(date_echec) -> str`** (Story 3.2) — pas un document complet ni un passage par Jinja2 : un fragment HTML f-string, délimité par les marqueurs `BANDEAU_ECHEC_DEBUT`/`FIN`, destiné à être patché après coup dans une page déjà publiée par `publish.publier_bandeau_echec` (un run qui échoue avant `rendre()` n'a par définition aucune `Entree` à rendre normalement). Date au format `%d/%m/%Y` (cohérent avec `digest.html.j2`) ; couleurs via `var(--bandeau-echec-bg)`/`var(--bandeau-echec-fg)`, deux variables CSS ajoutées au `:root`/bloc sombre de `digest.html.j2` (même système que `--recommandee-bg`), pas codées en dur.
 
 ### 10.11 `src/veille/publish.py` — publication de la page et de l'archive (AD-8, Stories 1.8/1.9)
 
@@ -566,10 +587,13 @@ Regroupe les `Entree` par registre et produit la page publiée (HTML) et l'archi
 - **`CHEMIN_PAGE`** (renommé depuis `CHEMIN_FICHIER` en Story 1.9) — `"index.html"`, distinct du chemin de l'archive (daté, construit à la volée dans `publier_archive`).
 - **`_jeton() -> str | None`** — résolution à deux niveaux : `GITHUB_TOKEN` (`.env`, nettoyé des espaces) en priorité, sinon repli sur `gh auth token`.
 - **`_client() -> httpx.Client | None`** — `None` si aucun jeton résolu, avertissement journalisé une seule fois.
+- **`_charge_existante(client, chemin) -> dict | None`** (Story 3.2) — `GET` bas niveau partagé : `None` si 404 (absent, pas une panne), sinon le JSON décodé (contenu + `sha`). `_sha_existant` et `publier_bandeau_echec` en dépendent tous les deux — avant la Story 3.2, cette requête était dupliquée à chaque nouvel appelant.
 - **`_sha_existant(client, chemin) -> str | None`** (paramétrée par le chemin depuis la Story 1.9, sert la page **et** l'archive) — sha du fichier existant, `None` si absent. Seul un **404** vaut « absent » : tout autre code (401/403/5xx) lève via `raise_for_status()`, isolé comme toute autre panne.
 - **`_publier(chemin, contenu, client, quoi, categorie) -> bool`** (extrait en Story 1.9, cœur partagé) — `GET` préalable pour le `sha`, puis `PUT` (création si absent, mise à jour sinon). Isolation totale, ne lève jamais, `False` sur échec. `categorie` (`"page"`/`"archive"`) sert uniquement à donner à chacune sa **propre** trace complète au premier échec (trouvé en revue — un booléen unique partagé aurait fait perdre la trace du second échec d'un même run).
 - **`publier(html, client=None) -> bool`** — appelant fin de `_publier(CHEMIN_PAGE, ...)`.
 - **`publier_archive(markdown, date_digest, client=None) -> bool`** (Story 1.9) — appelant fin de `_publier`, chemin `f"site/archive/{date_digest.isoformat()}.md"`. Relancer pour la même date écrase l'archive existante (upsert par `sha`, AD-9), jamais un doublon.
+- **`publier_bandeau_echec(bandeau, client=None) -> bool | None`** (Story 3.2) — contrairement à `publier()`, ne régénère pas la page : lit le HTML déjà publié (`_charge_existante`), y patche le fragment reçu via `_inserer_bandeau`, republie par le même upsert par `sha`. Retour à **trois** états (pas un simple `bool`, correctif de revue) : `None` = rien à annoter (aucune page publiée pour l'instant, pas une panne), `False` = vraie panne, `True` = succès.
+- **`_inserer_bandeau(html, bandeau) -> str`** (Story 3.2) — remplace le bandeau déjà présent entre les marqueurs stables s'il y en a un (idempotence — jamais en empiler deux sur des nuits d'échec consécutives), sinon l'insère juste après la balise `<body...>` (regex tolérante aux attributs, pas seulement `<body>` nu — corrigé en revue). Repli « pas de `<body>` du tout » : ajoute le bandeau en tête plutôt que de perdre le contenu existant. Remplacement via une fonction (`lambda m: bandeau`), pas une chaîne brute passée à `re.sub` — corrigé en revue : une chaîne de remplacement littérale interprète `\1`/`\g<0>`, un bandeau contenant un antislash aurait pu lever ou corrompre le HTML.
 - **Non encore validé contre l'API réelle** : le dépôt de sortie n'existe pas encore, ni un `.nojekyll` à sa racine (voir §8, §9).
 
 ### 10.12 `src/veille/pipeline.py` — orchestrateur du pipeline complet (AD-1, Stories 1.8/1.9)
@@ -577,7 +601,8 @@ Regroupe les `Entree` par registre et produit la page publiée (HTML) et l'archi
 Point d'entrée unique : `collecter()` → `enrichir()` → `marquer_recommandation()` → `rendre()` + `publier()` (page) → `rendre_markdown()` + `publier_archive()` (archive).
 
 - **`executer(sources_path=None, profil_path=None, scoring_path=None, quotas_path=None, llm_client=None, publish_client=None) -> bool`** — chemins de config résolus à l'appel ; `scoring_path` résolu via `collect.DEFAULT_SCORING_PATH` pour rester cohérent avec le chemin que `collecter()` a réellement utilisé. `llm_client` n'est volontairement pas typé `anthropic.Anthropic | None` (romprait l'invariant AD-7). **La page est rendue et publiée avant même que l'archive soit rendue** (trouvé en revue de la Story 1.9) : sans cet ordre, un `rendre_markdown()` qui lève après un `rendre()` réussi ferait perdre une page déjà prête. Retourne `True` seulement si la page **et** l'archive sont publiées avec succès (`page_ok and archive_ok`) — les deux toujours tentées, un échec de l'une n'empêchant jamais la tentative de l'autre. **Intégralité du corps enveloppée d'un filet de sécurité** : `collecter`/`enrichir`/`marquer_recommandation`/`publier`/`publier_archive` dégradent déjà proprement, mais `rendre()`/`rendre_markdown()` n'ont pas cette garantie propre (un template manquant lèverait `TemplateNotFound`).
-- **`main()`** — même patron que `collect.py`. Code de sortie non nul sur échec (`sys.exit`) : sans lui, un futur planificateur de tâches (FR-11, Epic 3) n'aurait aucun moyen de détecter une nuit en échec.
+- **`main()`** — même patron que `collect.py`. Code de sortie non nul sur échec (`sys.exit`) : sans lui, le planificateur de tâches (FR-11, Story 3.1 — GitHub Actions) n'aurait aucun moyen de détecter une nuit en échec.
+- **`main_bandeau_echec()`** (Story 3.2) — point d'entrée CLI distinct (`python -m veille.pipeline --bandeau-echec`), invoqué **uniquement** par le step `if: failure() || cancelled()` du workflow GitHub Actions, jamais par `executer()`/`main()`. Construit le fragment du jour (`render.rendre_bandeau_echec`) et le publie (`publish.publier_bandeau_echec`) ; ne lève jamais (même filet de sécurité que `executer()`). Code de sortie 0 pour le cas « rien à annoter » (`None`), non nul seulement pour une vraie panne de publication (`False`) — distinction ajoutée en revue pour ne pas transformer un cas normal (première nuit jamais publiée) en run rouge.
 - **Résout la partie d'AD-1 qui a un AC réel** (voir §7#24) — le chaînage interne de `collecter()` (collecte+dédup+filtre+quotas) n'est volontairement pas défait.
 
 ### 10.13 Fichiers de configuration
@@ -586,13 +611,13 @@ Point d'entrée unique : `collecter()` → `enrichir()` → `marquer_recommandat
 - **`config/profil.md`** — profil de filtrage d'Abdoulaye : 5 sections de mots-clés (`Thèmes prioritaires`, `Signal fort`, `Domaines d'application`, `Thèmes secondaires`, `Bruit`) + une section `Posture` (prose, ignorée par le parseur). Réécrite en Story 1.5 (revue) pour que la section Bruit ne contienne que des mots-clés atomiques, pas des phrases.
 - **`config/scoring.yaml`** — pondérations : `prioritaire: 10`, `signal_fort: 15`, `domaine: 5`, `secondaire: 2`, `bruit: -20`, `seuil_bruit: -5`, `marge_recommandation: 10` (Story 1.7 — rejetée si ≤ 0, repli sur le défaut).
 - **`config/quotas.yaml`** — quotas : `apprendre: 3`, `ce_qui_bouge: 3`, `pour_le_metier: 2`.
-- **`templates/digest.html.j2`** (Story 1.8) — template Jinja2 de la page publiée : structure sémantique, viewport meta tag, CSS embarqué (palette + typographie + media query `prefers-color-scheme: dark`), section par registre, marque de recommandation, lien conditionné à `url_surs()`.
+- **`templates/digest.html.j2`** (Story 1.8) — template Jinja2 de la page publiée : structure sémantique, viewport meta tag, CSS embarqué (palette + typographie + media query `prefers-color-scheme: dark`), section par registre, marque de recommandation, lien conditionné à `url_surs()`. Depuis la Story 3.2 : variables `--bandeau-echec-bg`/`--bandeau-echec-fg` (clair + sombre) dans le `:root` — consommées non pas par ce template lui-même, mais par `render.rendre_bandeau_echec`, dont le fragment est injecté après coup dans le HTML déjà publié (`publish.publier_bandeau_echec`) ; renommer ces deux variables sans mettre à jour `render.py` casserait le bandeau silencieusement.
 - **`templates/digest.md.j2`** (Story 1.9) — template Jinja2 de l'archive Markdown datée : mêmes sections/garde-fous que la page HTML, titre/accroche passés par le filtre `markdown_safe`, lien enveloppé `[texte](<url>)`.
 - **`.env.example`** — `ANTHROPIC_API_KEY=` (Story 1.6) et `GITHUB_TOKEN=` (Story 1.8, optionnel — repli sur `gh auth token`) ; le vrai `.env` est gitignoré (`!.env.example` annule l'ignorance générique de `.env.*`), vérifié sans fuite dans le dépôt ni son historique.
 
 ### 10.14 Tests
 
-353 tests, aucun appel réseau ni subprocess réel dans la suite automatisée (fixtures locales, clients simulés, `httpx.get`/`time.sleep` monkeypatchés, résolution de jeton monkeypatchée) — seules certaines Tasks des Stories 2.1/2.2/2.4 ont fait des exécutions réelles ponctuelles, hors suite `pytest`, documentées dans leurs Dev Agent Record respectifs. `tests/conftest.py` neutralise `profil.md`/`scoring.yaml`/`quotas.yaml` par défaut pour tous les tests (fixture `autouse`), afin qu'aucun test ne dépende implicitement de la configuration de production.
+373 tests, aucun appel réseau ni subprocess réel dans la suite automatisée (fixtures locales, clients simulés, `httpx.get`/`time.sleep` monkeypatchés, résolution de jeton monkeypatchée) — seules certaines Tasks des Stories 2.1/2.2/2.4 ont fait des exécutions réelles ponctuelles, hors suite `pytest`, documentées dans leurs Dev Agent Record respectifs. `tests/conftest.py` neutralise `profil.md`/`scoring.yaml`/`quotas.yaml` par défaut pour tous les tests (fixture `autouse`), afin qu'aucun test ne dépende implicitement de la configuration de production.
 
 | Fichier | Périmètre | Tests |
 |---|---|---|
@@ -611,17 +636,16 @@ Point d'entrée unique : `collecter()` → `enrichir()` → `marquer_recommandat
 | `test_rapport_collecte.py` | Observabilité (`RapportSource`, états muette/échec, anomalie de pannes réseau — Story 2.2 ; backoff 429 de bout en bout sur les 3 connecteurs — Story 2.3) | 15 |
 | `test_reseau.py` | Backoff HTTP partagé sur 429 (`_reseau.get_avec_backoff`) — Story 2.3 | 11 |
 | `test_collecte_integration.py` | **Chemin réel** config → `collecter()` → rapport, pour chaque mécanisme, dédoublonnage inter-types compris (`rss`↔`json`, `rss`↔`scrape` — Story 2.4) | 27 |
-| `test_render.py` | Rendu HTML + Markdown : sections, palette, dark mode, échappement (HTML et Markdown), schéma/chevrons d'URI, registre inconnu | 32 |
-| `test_publish.py` | Publication (page + archive) : résolution de jeton, création/mise à jour, isolation de panne, trace par catégorie | 19 |
-| `test_pipeline.py` | Orchestrateur : chemin complet (page + archive), dégradation sans clé/jeton, filet de sécurité, corrélation contenu↔chemin | 6 |
+| `test_render.py` | Rendu HTML + Markdown : sections, palette, dark mode, échappement (HTML et Markdown), schéma/chevrons d'URI, registre inconnu, bandeau d'échec (Story 3.2) | 34 |
+| `test_publish.py` | Publication (page + archive) : résolution de jeton, création/mise à jour, isolation de panne, trace par catégorie, bandeau d'échec idempotent (Story 3.2) | 30 |
+| `test_pipeline.py` | Orchestrateur : chemin complet (page + archive), dégradation sans clé/jeton, filet de sécurité, corrélation contenu↔chemin, préservation sur échec + `main_bandeau_echec` (Story 3.2) | 13 |
 
 ## 11. Prochaine étape
 
-**Epic 1 et Epic 2 sont entièrement terminés.** Epic 1 (Stories 1.1-1.9) : le pipeline complet existe, de la collecte à la double publication (page + archive), à l'échelle réduite visée (3-5 sources). Epic 2 (Stories 2.1-2.4) : socle porté à 17 sources, isolation de panne durcie sur les 3 connecteurs (timeout, détection d'anomalie majoritaire, backoff sur 429), dédoublonnage revérifié à l'échelle. **Epic 3 est démarré** : Story 3.1 (`done`) ajoute le déclencheur nocturne (GitHub Actions, amendement d'architecture par rapport au Planificateur Windows prévu à l'origine — PC de dev migré sur Mac).
+**Epic 1 et Epic 2 sont entièrement terminés.** Epic 1 (Stories 1.1-1.9) : le pipeline complet existe, de la collecte à la double publication (page + archive), à l'échelle réduite visée (3-5 sources). Epic 2 (Stories 2.1-2.4) : socle porté à 17 sources, isolation de panne durcie sur les 3 connecteurs (timeout, détection d'anomalie majoritaire, backoff sur 429), dédoublonnage revérifié à l'échelle. **Epic 3 est en cours** : Story 3.1 (`done`) ajoute le déclencheur nocturne (GitHub Actions, amendement d'architecture par rapport au Planificateur Windows prévu à l'origine — PC de dev migré sur Mac) ; Story 3.2 (`done`) verrouille la préservation de la page existante sur échec et ajoute un bandeau honnête sur la page publiée.
 
-- **Story 3.2 — Reprendre proprement après un échec (prochaine étape).** Suppose `store.py`/SQLite (AD-5, toujours à construire) : l'état « déjà vu » ne doit être validé qu'après une publication réussie (AD-11), pour qu'un run qui échoue entre la collecte et la publication ne perde aucun item à la reprise.
-- **Story 3.3 — Relancer sans jamais dupliquer.** Upsert par date déjà en place pour la page/l'archive (AD-9, Story 1.9) — à revérifier explicitement pour une relance le même jour.
-- **Story 3.4 — Ne jamais remontrer un item déjà publié.** Ferme la boucle de l'état « déjà vu » commencée en 3.2 — dépend directement de `store.py`.
+- **Story 3.3 — Relancer sans jamais dupliquer (prochaine étape).** Upsert par date déjà en place pour la page/l'archive (AD-9, Story 1.9) — à revérifier explicitement pour une relance le même jour.
+- **Story 3.4 — Ne jamais remontrer un item déjà publié.** Seule story d'Epic 3 qui dépendra réellement de `store.py`/SQLite (AD-5, toujours à construire) — **correction par rapport à la prévision précédente** : la Story 3.2 n'en avait finalement pas eu besoin (préservation de la page déjà garantie par construction, bandeau patché après coup sur le HTML publié) ; c'est bien 3.4, pas 3.2, qui introduira l'état persistant.
 - **Epic 4 — Santé des sources et découverte.** Le moins urgent tant que le socle reste petit et géré manuellement.
 
 **Avant l'un ou l'autre, ou en parallèle** : créer le second dépôt GitHub public de sortie et y activer GitHub Pages (+ `.nojekyll`) — seule chose qui manque pour valider `publish.py` (page et archive) contre l'API réelle plutôt qu'en dégradation simulée. Et dès qu'une clé `ANTHROPIC_API_KEY` sera fournie : valider `enrich/llm.py` contre l'API véritable (langue, longueur, coût mesuré) — déjà branché dans un run réel depuis la Story 1.8, seule la validation manque.
