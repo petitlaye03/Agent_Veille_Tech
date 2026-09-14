@@ -16,9 +16,9 @@ from pathlib import Path
 
 import httpx
 
-from veille import collect
+from veille import collect, store
 from veille.enrich.llm import enrichir, marquer_recommandation
-from veille.filter import charger_ponderations
+from veille.filter import CHAMPS_QUOTAS, charger_ponderations
 from veille.publish import publier, publier_archive, publier_bandeau_echec
 from veille.render import rendre, rendre_bandeau_echec, rendre_markdown
 
@@ -32,6 +32,8 @@ def executer(
     quotas_path: str | Path | None = None,
     llm_client: object | None = None,
     publish_client: httpx.Client | None = None,
+    deja_vus_path: str | Path | None = None,
+    store_client: httpx.Client | None = None,
 ) -> bool:
     """Exécute le pipeline complet, un seul run.
 
@@ -65,36 +67,127 @@ def executer(
     des deux étapes ne doit jamais faire perdre l'autre alors qu'elle
     aurait pu réussir.
 
+    État « déjà vu » (AD-5, AD-11, Story 3.4) : synchronisé depuis le
+    dépôt source **avant** la collecte (`store.synchroniser_depuis_distant`),
+    passé à `collect.collecter` pour écarter ce qui a déjà été publié une
+    nuit précédente, puis — **seulement si `page_ok and archive_ok`** —
+    marqué comme vu et retéléversé vers le dépôt source. Marquer avant
+    d'avoir confirmé la publication romprait AD-11 : un run qui échoue
+    après collecte mais avant publication perdrait silencieusement les
+    items de la nuit, jamais retentés. `store.ouvrir`/`marquer_vus`/
+    `televerser_vers_distant` ne lèvent jamais de leur côté (mêmes
+    garanties que `collecter`/`publier`), donc leur échec ne fait pas
+    échouer le run — seul `page_ok and archive_ok` en décide.
+    `deja_vus_path`/`store_client` suivent la même convention
+    d'injection que les autres chemins/clients : `None` par défaut
+    (chemin/jeton réels), substituables par les tests pour ne jamais
+    toucher le vrai `data/deja-vu.sqlite3` du dépôt ni le réseau.
+
     Ne lève jamais : `collecter`, `enrichir`, `marquer_recommandation`,
-    `publier` et `publier_archive` dégradent déjà proprement de leur côté,
-    mais `rendre()`/`rendre_markdown()` n'ont pas cette garantie qui leur
-    soit propre (aucun appel réseau à isoler, mais un template manquant ou
-    corrompu lèverait — trouvé en revue). L'intégralité du corps de cette
-    fonction est donc enveloppée d'un filet de sécurité de dernier recours.
-    Retourne `True` si la page **et** l'archive ont été publiées avec
-    succès, `False` sinon — jamais d'exception qui remonterait jusqu'à
-    l'appelant.
+    `publier`, `publier_archive` et les fonctions de synchronisation de
+    `store.py` (`synchroniser_depuis_distant`/`televerser_vers_distant`)
+    dégradent déjà proprement de leur côté ; `store.ouvrir()`, lui, peut
+    légitimement lever (fichier local corrompu — voir sa propre
+    docstring), donc cette fonction l'isole explicitement elle-même
+    (trouvé en revue) plutôt que de laisser une panne locale à ce seul
+    sous-système faire échouer toute la nuit : dégrade en désactivant le
+    filtrage/marquage « déjà vu » pour ce run, sans jamais abandonner la
+    collecte/publication elles-mêmes. Le marquage/retéléversement après
+    succès est isolé de la même façon (voir plus bas) : une panne à cette
+    étape ne doit jamais transformer une publication pourtant réussie en
+    run déclaré en échec. `rendre()`/`rendre_markdown()` n'ont pas de
+    garantie de non-levée qui leur soit propre (aucun appel réseau à
+    isoler, mais un template manquant ou corrompu lèverait — trouvé en
+    revue). L'intégralité du corps de cette fonction est donc enveloppée
+    d'un filet de sécurité de dernier recours. Retourne `True` si la page
+    **et** l'archive ont été publiées avec succès, `False` sinon — jamais
+    d'exception qui remonterait jusqu'à l'appelant.
     """
     try:
         scoring_path_resolu = (
             collect.DEFAULT_SCORING_PATH if scoring_path is None else scoring_path
         )
 
-        resultat_collecte = collect.collecter(sources_path, profil_path, scoring_path, quotas_path)
-        entrees = enrichir(resultat_collecte.items, client=llm_client)
+        store.synchroniser_depuis_distant(deja_vus_path, client=store_client)
+        try:
+            deja_vus_conn = store.ouvrir(deja_vus_path)
+        except Exception:  # noqa: BLE001 — isolation dédiée (trouvé en revue) :
+            # une panne d'ouverture locale (fichier corrompu, disque plein…)
+            # ne doit dégrader que le filtrage « déjà vu » de ce run, jamais
+            # faire perdre la collecte/publication elles-mêmes.
+            logger.exception(
+                "Impossible d'ouvrir l'état « déjà vu » local — collecte "
+                "sans filtrage déjà-vu pour cette nuit."
+            )
+            deja_vus_conn = None
+        try:
+            resultat_collecte = collect.collecter(
+                sources_path,
+                profil_path,
+                scoring_path,
+                quotas_path,
+                deja_vus_conn=deja_vus_conn,
+            )
+            entrees = enrichir(resultat_collecte.items, client=llm_client)
 
-        ponderations = charger_ponderations(scoring_path_resolu)
-        entrees = marquer_recommandation(entrees, resultat_collecte.resultats_repartis, ponderations)
+            ponderations = charger_ponderations(scoring_path_resolu)
+            entrees = marquer_recommandation(entrees, resultat_collecte.resultats_repartis, ponderations)
 
-        maintenant = datetime.now(timezone.utc)
+            maintenant = datetime.now(timezone.utc)
 
-        html = rendre(entrees, maintenant)
-        page_ok = publier(html, client=publish_client)
+            html = rendre(entrees, maintenant)
+            page_ok = publier(html, client=publish_client)
 
-        markdown = rendre_markdown(entrees, maintenant)
-        archive_ok = publier_archive(markdown, maintenant.date(), client=publish_client)
+            markdown = rendre_markdown(entrees, maintenant)
+            archive_ok = publier_archive(markdown, maintenant.date(), client=publish_client)
 
-        return page_ok and archive_ok
+            if page_ok and archive_ok and deja_vus_conn is not None:
+                # Isolé de son propre `try` (trouvé en revue) : la publication
+                # a déjà réussi à ce stade — une panne de marquage/
+                # retéléversement ne doit jamais requalifier ce succès en
+                # échec (ce que le filet de sécurité englobant ferait sinon).
+                try:
+                    # Un item dont le `registre` n'est reconnu par aucune
+                    # section publiée (`render._grouper_par_registre`,
+                    # dégradation pré-existante documentée depuis la Story
+                    # 1.8) n'a en réalité jamais été montré à l'utilisateur —
+                    # le marquer « vu » le ferait disparaître en permanence
+                    # de toute collecte future sans avoir jamais été publié
+                    # une seule fois (trouvé en revue). Seuls les items dont
+                    # le registre correspond à une section réellement rendue
+                    # sont marqués.
+                    items_publies = [
+                        item for item in resultat_collecte.items if item.registre in CHAMPS_QUOTAS
+                    ]
+                    store.marquer_vus(items_publies, deja_vus_conn)
+                    if not store.televerser_vers_distant(deja_vus_path, client=store_client):
+                        # Trouvé en revue (convergence des 3 couches) : sans ce
+                        # log, un échec de retéléversement était totalement
+                        # silencieux — les marques restent locales à ce run
+                        # éphémère, jamais vues du prochain, qui peut donc
+                        # republier les mêmes items. Le log ne corrige pas ce
+                        # risque résiduel (pas de nouvelle tentative — même
+                        # discipline que `publish.py`, qui ne relance jamais
+                        # non plus), mais il rend l'échec visible dans les
+                        # logs du run au lieu de disparaître sans trace.
+                        logger.warning(
+                            "Retéléversement de l'état « déjà vu » en échec — "
+                            "les items de cette nuit ne seront pas exclus des "
+                            "collectes futures tant que l'état distant n'aura "
+                            "pas été resynchronisé avec succès."
+                        )
+                except Exception:  # noqa: BLE001 — voir commentaire ci-dessus
+                    logger.exception(
+                        "Échec du marquage/retéléversement de l'état « déjà "
+                        "vu » après une publication pourtant réussie — la nuit "
+                        "reste un succès (digest publié), mais certains items "
+                        "pourraient réapparaître une prochaine nuit."
+                    )
+
+            return page_ok and archive_ok
+        finally:
+            if deja_vus_conn is not None:
+                deja_vus_conn.close()
     except Exception:  # noqa: BLE001 — filet de sécurité de dernier recours (trouvé en revue)
         logger.exception("Échec inattendu du pipeline — nuit perdue, mais le run ne plante pas.")
         return False

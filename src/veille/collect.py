@@ -11,6 +11,7 @@ distingue trois états — collectée, muette (zéro item sans erreur), en éche
 """
 
 import logging
+import sqlite3
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -36,6 +37,7 @@ from veille.filter import (
 )
 from veille.models import Item
 from veille.profil import DEFAULT_PROFIL_PATH, charger_profil
+from veille.store import RapportDejaVu, filtrer_deja_vus
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +99,7 @@ class ResultatCollecte:
 
     items: list[Item] = field(default_factory=list)
     rapports: list[RapportSource] = field(default_factory=list)
+    deja_vu: RapportDejaVu = field(default_factory=RapportDejaVu)
     dedoublonnage: RapportDedoublonnage = field(default_factory=RapportDedoublonnage)
     filtrage_signal: RapportFiltrageSignal = field(default_factory=RapportFiltrageSignal)
     classement: RapportClassement = field(default_factory=RapportClassement)
@@ -173,6 +176,8 @@ class ResultatCollecte:
         # doublon masquait les pertes dues au seuil de signal et au bruit.
         if collectes != len(self.items):
             pertes = []
+            if self.deja_vu.total_ecartes:
+                pertes.append(f"{self.deja_vu.total_ecartes} déjà vu(s)")
             if self.dedoublonnage.total_ecartes:
                 pertes.append(f"{self.dedoublonnage.total_ecartes} doublon(s)")
             if self.filtrage_signal.total_ecartes:
@@ -204,6 +209,9 @@ class ResultatCollecte:
                     )
             lignes.append(f"  {rapport.source_id:22s} [{rapport.type:6s}] {etat}")
 
+        if self.deja_vu.total_ecartes:
+            lignes.append(f"  {self.deja_vu.resume()}")
+
         if self.dedoublonnage.total_ecartes:
             lignes.append(f"  {self.dedoublonnage.resume()}")
 
@@ -230,6 +238,7 @@ def collecter(
     profil_path: str | Path | None = None,
     scoring_path: str | Path | None = None,
     quotas_path: str | Path | None = None,
+    deja_vus_conn: sqlite3.Connection | None = None,
 ) -> ResultatCollecte:
     """Collecte le socle et rend compte de ce que chaque source a produit.
 
@@ -237,9 +246,20 @@ def collecter(
     configuration : un `sources.yaml` absent ou illisible produit une
     collecte vide et journalisée, jamais un plantage du run entier.
 
-    Pipeline complet (Story 1.5) : collecte → **seuil de signal** →
-    dédoublonnage → **scoring par profil** → **quotas par registre**. Le
-    profil, les pondérations et les quotas se chargent après la boucle
+    Pipeline complet, dans cet ordre exact (Story 3.4 ajoute la première
+    étape) : collecte → **déjà vu** → **seuil de signal** → dédoublonnage
+    → **scoring par profil** → **quotas par registre**. Le filtrage
+    « déjà vu » passe en premier, avant toute autre étape de filtrage
+    (conformément à l'AC de la Story 3.4) : un item déjà publié une nuit
+    précédente ne doit même pas être considéré par le seuil de signal, le
+    dédoublonnage ou le scoring. `deja_vus_conn` est optionnel
+    (`None` par défaut) : sans connexion fournie, aucun filtrage « déjà
+    vu » n'a lieu — ni régression pour les appelants existants (tests,
+    `run()`), ni couplage de `collect.py` à `sqlite3` au-delà de la
+    signature de ce seul paramètre (`store.py` reste seul responsable du
+    format de la connexion).
+
+    Le profil, les pondérations et les quotas se chargent après la boucle
     protégée par source : `charger_profil`, `charger_ponderations` et
     `charger_quotas` ne lèvent jamais, une configuration absente ou
     illisible dégrade plutôt que de faire perdre la nuit.
@@ -276,6 +296,16 @@ def collecter(
         items_source, echec = _fetch_one(source_config)
         items.extend(items_source)
         collecte_par_source.append((source_config, items_source, echec))
+
+    # Le filtrage « déjà vu » (Story 3.4) passe **avant** toute autre étape
+    # de filtrage : un item déjà publié une nuit précédente ne doit même
+    # pas être considéré par le seuil de signal, le dédoublonnage ou le
+    # scoring. `deja_vus_conn` est optionnel : sans connexion fournie
+    # (appelants existants, tests), aucun filtrage n'a lieu.
+    if deja_vus_conn is not None:
+        items, rapport_deja_vu = filtrer_deja_vus(items, deja_vus_conn)
+    else:
+        rapport_deja_vu = RapportDejaVu()
 
     # Le seuil de signal passe **avant** le dédoublonnage : il est déclaré
     # par source, donc chaque item doit être jugé sur le seuil de la sienne.
@@ -320,6 +350,7 @@ def collecter(
     resultat = ResultatCollecte(
         items=items,
         rapports=rapports,
+        deja_vu=rapport_deja_vu,
         dedoublonnage=rapport_dedup,
         filtrage_signal=rapport_signal,
         classement=rapport_classement_obtenu,

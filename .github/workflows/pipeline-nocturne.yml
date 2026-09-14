@@ -16,6 +16,11 @@
 #     dépôt courant (Agent_Veille_Tech), pas au dépôt de sortie
 #   - le dépôt de sortie lui-même doit exister (sinon publish.py dégrade :
 #     rien n'est publié, sans planter)
+#   - aucun secret supplémentaire pour l'état « déjà vu » (Story 3.4) : le
+#     jeton ambiant du job suffit (SOURCE_GITHUB_TOKEN mappé sur
+#     secrets.GITHUB_TOKEN, scopé à ce dépôt-ci grâce à `permissions:
+#     contents: write` ci-dessous) — sans lui, store.py dégrade : l'état
+#     reste local au run, jamais synchronisé, sans planter
 #
 # Risque connu, non contournable par la configuration de ce fichier (trouvé
 # en revue) : GitHub désactive silencieusement un déclencheur `schedule`
@@ -45,11 +50,13 @@ concurrency:
   group: pipeline-nocturne
   cancel-in-progress: false
 
-# Lecture seule sur le dépôt courant : ce job n'a besoin d'écrire nulle part
-# ici (les écritures réelles visent le dépôt de sortie, via le jeton dédié
-# DIGEST_PUBLISH_TOKEN ci-dessous, pas le jeton ambiant de ce job).
+# Écriture sur le dépôt courant depuis la Story 3.4 (AD-5, AD-11) : l'état
+# « déjà vu » (data/deja-vu.sqlite3) est committé dans **ce** dépôt (source,
+# privé) via le jeton ambiant du job (secrets.GITHUB_TOKEN, mappé sur
+# SOURCE_GITHUB_TOKEN ci-dessous) — distinct des écritures vers le dépôt de
+# sortie, qui restent portées par DIGEST_PUBLISH_TOKEN comme avant.
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   executer-le-pipeline:
@@ -93,6 +100,11 @@ jobs:
           # explicitement ici, pour éviter qu'il ne soit confondu par
           # inadvertance avec le jeton ambiant que son nom évoque d'habitude.
           GITHUB_TOKEN: ${{ secrets.DIGEST_PUBLISH_TOKEN }}
+          # État « déjà vu » (Story 3.4) : écrit sur **ce** dépôt (source),
+          # donc le jeton ambiant du job suffit (permissions: contents:
+          # write ci-dessus) — jamais DIGEST_PUBLISH_TOKEN, scopé au dépôt
+          # de sortie, sans aucun droit sur celui-ci.
+          SOURCE_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: uv run python -m veille.pipeline
 
       - name: Publier un bandeau d'échec si le pipeline a échoué

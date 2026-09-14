@@ -1,6 +1,7 @@
 import textwrap
 from pathlib import Path
 
+from veille import store
 from veille.collect import collecter, run
 from veille.filter import ItemScore
 
@@ -197,3 +198,69 @@ def test_une_source_defaillante_n_empeche_pas_les_autres_types(tmp_path):
 
     assert len(items) == 2
     assert all(i.source_id == "source-rss" for i in items)
+
+
+# --- Déjà vu (Story 3.4) ----------------------------------------------
+
+
+def test_collecter_sans_connexion_deja_vus_ne_filtre_rien(tmp_path):
+    """`deja_vus_conn` est optionnel (`None` par défaut) : sans connexion
+    fournie, aucun filtrage « déjà vu » n'a lieu — pas de régression pour
+    les appelants existants."""
+    sources_yaml = _write_sources_yaml(tmp_path)
+
+    resultat = collecter(sources_yaml)
+
+    assert len(resultat.items) == 2
+    assert resultat.deja_vu.total_ecartes == 0
+
+
+def test_collecter_ecarte_un_item_deja_marque_vu(tmp_path):
+    sources_yaml = _write_sources_yaml(tmp_path)
+    conn = store.ouvrir(tmp_path / "deja-vu.sqlite3")
+
+    # Premier passage : rien de connu, les deux items sont retenus, puis
+    # marqués vus (comme le ferait `pipeline.executer()` après publication).
+    premier = collecter(sources_yaml, deja_vus_conn=conn)
+    assert len(premier.items) == 2
+    store.marquer_vus(premier.items, conn)
+
+    # Second passage, mêmes sources : les deux items sont déjà vus, donc
+    # écartés **avant** même le seuil de signal/dédoublonnage/scoring.
+    second = collecter(sources_yaml, deja_vus_conn=conn)
+    conn.close()
+
+    assert second.items == []
+    assert second.deja_vu.total_ecartes == 2
+    assert second.deja_vu.ecartes_par_source == {"test-source": 2}
+
+
+def test_collecter_ne_filtre_que_les_items_deja_vus_pas_les_nouveaux(tmp_path):
+    sources_yaml = tmp_path / "sources.yaml"
+    feed_path = (FIXTURE_DIR / "sample_feed.xml").as_posix()
+    sources_yaml.write_text(
+        textwrap.dedent(
+            f"""
+            sources:
+              - id: test-source
+                type: rss
+                url: {feed_path}
+                langue: fr
+                registre: apprendre
+            """
+        ),
+        encoding="utf-8",
+    )
+    conn = store.ouvrir(tmp_path / "deja-vu.sqlite3")
+    conn.execute(
+        "INSERT OR IGNORE INTO deja_vu (cle) VALUES (?)",
+        ("url:example.invalid/articles/premier",),
+    )
+    conn.commit()
+
+    resultat = collecter(sources_yaml, deja_vus_conn=conn)
+    conn.close()
+
+    assert len(resultat.items) == 1
+    assert resultat.items[0].url == "https://example.invalid/articles/deuxieme"
+    assert resultat.deja_vu.total_ecartes == 1

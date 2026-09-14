@@ -9,9 +9,22 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from veille import pipeline
+from veille import pipeline, store
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
+
+
+@pytest.fixture(autouse=True)
+def _isoler_le_stockage_deja_vu(tmp_path, monkeypatch):
+    """Isole tous les tests de ce module du vrai `data/deja-vu.sqlite3` du
+    dépôt de travail et de tout appel réseau de synchronisation (Story 3.4)
+    — sans ceci, chaque appel à `pipeline.executer()` ouvrirait/écrirait le
+    fichier par défaut et tenterait de résoudre un jeton réel (`gh auth
+    token`). Les tests qui exercent spécifiquement le câblage du stockage
+    (synchronisation, marquage, retéléversement) remplacent explicitement
+    ce qu'il faut par-dessus cette isolation par défaut."""
+    monkeypatch.setattr(store, "CHEMIN_LOCAL_DEFAUT", tmp_path / "deja-vu.sqlite3")
+    monkeypatch.setattr(store, "_jeton", lambda: None)
 
 
 def _sources_yaml(tmp_path):
@@ -551,3 +564,273 @@ def test_executer_degrade_proprement_sans_client_llm_ni_jeton_de_publication(
     reussite = pipeline.executer(sources_path=sources_yaml)
 
     assert reussite is False
+
+
+# --- Câblage de l'état « déjà vu » (AD-5, AD-11, Story 3.4) --------------
+
+
+class _ClientStoreSimule:
+    """Simule le client HTTP de `store.py` : mêmes conventions que
+    `_ClientPublicationSimule`, dépôt source distinct."""
+
+    def __init__(self):
+        self.get_calls = []
+        self.put_calls = []
+        self.closed = False
+
+    def get(self, url):
+        self.get_calls.append(url)
+        return _FakeResponse(404)
+
+    def put(self, url, json=None):
+        self.put_calls.append((url, json))
+        return _FakeResponse(201)
+
+    def close(self):
+        self.closed = True
+
+
+def test_executer_marque_vus_et_televerse_seulement_apres_succes(tmp_path):
+    """AD-11 : `marquer_vus`/`televerser_vers_distant` ne doivent être
+    appelés qu'une fois `page_ok and archive_ok` confirmés — jamais avant,
+    jamais sur un échec, pour qu'un run qui échoue puisse retenter les
+    mêmes items à la prochaine reprise."""
+    sources_yaml = _sources_yaml(tmp_path)
+    deja_vus_path = tmp_path / "deja-vu.sqlite3"
+    client_store = _ClientStoreSimule()
+
+    reussite = pipeline.executer(
+        sources_path=sources_yaml,
+        llm_client=_ClientLLMSimule(),
+        publish_client=_ClientPublicationSimule(),
+        deja_vus_path=deja_vus_path,
+        store_client=client_store,
+    )
+
+    assert reussite is True
+    # Synchronisation en lecture avant collecte, retéléversement après
+    # succès : au moins un GET (sync + vérif sha avant PUT) et un PUT.
+    assert len(client_store.get_calls) >= 1
+    assert len(client_store.put_calls) == 1
+
+    from veille import store
+
+    conn = store.ouvrir(deja_vus_path)
+    try:
+        lignes = conn.execute("SELECT cle FROM deja_vu").fetchall()
+    finally:
+        conn.close()
+    # Chaque item de test porte à la fois une URL et un guid distincts
+    # (fixture RSS) : deux items marqués vus = 4 clés d'identité en base.
+    assert len(lignes) == 4
+
+
+def test_executer_ne_marque_rien_ni_ne_televerse_si_la_publication_echoue(tmp_path, monkeypatch):
+    sources_yaml = _sources_yaml(tmp_path)
+    deja_vus_path = tmp_path / "deja-vu.sqlite3"
+    client_store = _ClientStoreSimule()
+
+    from veille import publish
+
+    monkeypatch.setattr(publish, "_jeton_depuis_env", lambda: None)
+    monkeypatch.setattr(publish, "_jeton_depuis_gh_cli", lambda: None)
+
+    reussite = pipeline.executer(
+        sources_path=sources_yaml,
+        llm_client=_ClientLLMSimule(),
+        publish_client=None,  # aucun jeton résolu en test → publication en échec
+        deja_vus_path=deja_vus_path,
+        store_client=client_store,
+    )
+
+    assert reussite is False
+    assert client_store.put_calls == []
+
+    from veille import store
+
+    conn = store.ouvrir(deja_vus_path)
+    try:
+        lignes = conn.execute("SELECT cle FROM deja_vu").fetchall()
+    finally:
+        conn.close()
+    assert lignes == []
+
+
+def test_executer_filtre_les_items_deja_marques_vus_lors_d_une_relance(tmp_path, monkeypatch):
+    """Bout en bout : un run réussi marque ses items vus ; un second run,
+    mêmes sources, ne republie plus rien (tout est déjà vu) — sans qu'un
+    troisième run ne casse quoi que ce soit une fois la nuit épuisée."""
+    monkeypatch.setattr(pipeline, "datetime", _HorlogeFigee)
+    sources_yaml = _sources_yaml(tmp_path)
+    deja_vus_path = tmp_path / "deja-vu.sqlite3"
+
+    entrees_captees = []
+    rendre_original = pipeline.rendre
+
+    def _rendre_espion(entrees, maintenant):
+        entrees_captees.append(list(entrees))
+        return rendre_original(entrees, maintenant)
+
+    monkeypatch.setattr(pipeline, "rendre", _rendre_espion)
+
+    premiere_reussite = pipeline.executer(
+        sources_path=sources_yaml,
+        llm_client=_ClientLLMSimule(),
+        publish_client=_ClientPublicationSimule(),
+        deja_vus_path=deja_vus_path,
+        store_client=_ClientStoreSimule(),
+    )
+    seconde_reussite = pipeline.executer(
+        sources_path=sources_yaml,
+        llm_client=_ClientLLMSimule(),
+        publish_client=_ClientPublicationSimule(),
+        deja_vus_path=deja_vus_path,
+        store_client=_ClientStoreSimule(),
+    )
+
+    assert premiere_reussite is True
+    assert seconde_reussite is True
+    assert len(entrees_captees[0]) == 2  # premier run : tout est nouveau
+    assert entrees_captees[1] == []  # second run : tout est déjà vu
+
+
+class _ClientStoreQuiEchoueAuTeleversement:
+    """PUT échoue systématiquement (panne réseau/jeton expiré simulée) —
+    GET se comporte normalement (404 : rien de distant encore)."""
+
+    def __init__(self):
+        self.put_calls = []
+        self.closed = False
+
+    def get(self, url):
+        return _FakeResponse(404)
+
+    def put(self, url, json=None):
+        self.put_calls.append((url, json))
+        return _FakeResponse(500)
+
+    def close(self):
+        self.closed = True
+
+
+def test_executer_reussit_quand_meme_si_le_televersement_echoue_mais_avertit(
+    tmp_path, caplog
+):
+    """Revue (convergence 3/3 couches) : un échec de retéléversement après
+    une publication réussie ne doit jamais faire échouer le run (le digest
+    a bel et bien été publié) — mais ne doit plus non plus rester
+    totalement silencieux, corrigé en revue par un log explicite."""
+    import logging
+
+    sources_yaml = _sources_yaml(tmp_path)
+    deja_vus_path = tmp_path / "deja-vu.sqlite3"
+
+    with caplog.at_level(logging.WARNING, logger="veille.pipeline"):
+        reussite = pipeline.executer(
+            sources_path=sources_yaml,
+            llm_client=_ClientLLMSimule(),
+            publish_client=_ClientPublicationSimule(),
+            deja_vus_path=deja_vus_path,
+            store_client=_ClientStoreQuiEchoueAuTeleversement(),
+        )
+
+    assert reussite is True  # la page ET l'archive ont bien été publiées
+    assert "Retéléversement de l'état « déjà vu » en échec" in caplog.text
+
+
+def test_executer_ne_devient_pas_un_echec_si_le_marquage_deja_vu_leve(
+    tmp_path, monkeypatch
+):
+    """Revue : une exception dans le marquage/retéléversement (après une
+    publication pourtant réussie) ne doit jamais requalifier le run en
+    échec — isolée par son propre `try` plutôt que par le filet de
+    sécurité englobant de `executer()`."""
+    sources_yaml = _sources_yaml(tmp_path)
+    deja_vus_path = tmp_path / "deja-vu.sqlite3"
+
+    from veille import store
+
+    def _marquer_vus_qui_leve(*args, **kwargs):
+        raise RuntimeError("disque plein simulé")
+
+    monkeypatch.setattr(store, "marquer_vus", _marquer_vus_qui_leve)
+
+    reussite = pipeline.executer(
+        sources_path=sources_yaml,
+        llm_client=_ClientLLMSimule(),
+        publish_client=_ClientPublicationSimule(),
+        deja_vus_path=deja_vus_path,
+        store_client=_ClientStoreSimule(),
+    )
+
+    assert reussite is True  # la publication, elle, a bien réussi
+
+
+def test_executer_degrade_sans_filtrage_deja_vu_si_store_ouvrir_leve(
+    tmp_path, monkeypatch
+):
+    """Revue (convergence blind+edge) : une panne d'ouverture du fichier
+    SQLite local ne doit dégrader que le filtrage « déjà vu » de ce run —
+    jamais faire perdre toute la collecte/publication."""
+    sources_yaml = _sources_yaml(tmp_path)
+    deja_vus_path = tmp_path / "deja-vu.sqlite3"
+
+    from veille import store
+
+    def _ouvrir_qui_leve(*args, **kwargs):
+        raise RuntimeError("fichier corrompu simulé")
+
+    monkeypatch.setattr(store, "ouvrir", _ouvrir_qui_leve)
+
+    reussite = pipeline.executer(
+        sources_path=sources_yaml,
+        llm_client=_ClientLLMSimule(),
+        publish_client=_ClientPublicationSimule(),
+        deja_vus_path=deja_vus_path,
+        store_client=_ClientStoreSimule(),
+    )
+
+    assert reussite is True
+
+
+def test_executer_ne_marque_pas_vu_un_item_de_registre_inconnu(tmp_path):
+    """Revue (Acceptance Auditor) : un item dont le `registre` n'est
+    reconnu par aucune section rendue (`render._grouper_par_registre`,
+    dégradation pré-existante documentée depuis la Story 1.8) n'a jamais
+    été réellement montré à l'utilisateur — le marquer « vu » le ferait
+    disparaître en permanence sans avoir jamais été publié une seule fois."""
+    sources_yaml = tmp_path / "sources.yaml"
+    feed_path = (FIXTURE_DIR / "sample_feed.xml").as_posix()
+    sources_yaml.write_text(
+        textwrap.dedent(
+            f"""
+            sources:
+              - id: test-source
+                type: rss
+                url: {feed_path}
+                langue: fr
+                registre: registre-inconnu
+            """
+        ),
+        encoding="utf-8",
+    )
+    deja_vus_path = tmp_path / "deja-vu.sqlite3"
+
+    reussite = pipeline.executer(
+        sources_path=sources_yaml,
+        llm_client=_ClientLLMSimule(),
+        publish_client=_ClientPublicationSimule(),
+        deja_vus_path=deja_vus_path,
+        store_client=_ClientStoreSimule(),
+    )
+
+    assert reussite is True
+
+    from veille import store
+
+    conn = store.ouvrir(deja_vus_path)
+    try:
+        lignes = conn.execute("SELECT cle FROM deja_vu").fetchall()
+    finally:
+        conn.close()
+    assert lignes == []  # rien marqué : jamais réellement publié
