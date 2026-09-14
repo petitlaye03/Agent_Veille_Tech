@@ -155,8 +155,11 @@ def _publier(chemin: str, contenu: str, client: httpx.Client | None, quoi: str, 
 
     try:
         sha = _sha_existant(resolu, chemin)
+        # Trouvé en revue (Story 3.3) : le message de commit disait « Mise à
+        # jour » même pour une toute première création — trompeur dans
+        # l'historique du dépôt de sortie, corrigé pour refléter les deux cas.
         corps = {
-            "message": f"Mise à jour {quoi}",
+            "message": f"{'Mise à jour' if sha else 'Publication'} {quoi}",
             "content": base64.b64encode(contenu.encode("utf-8")).decode("ascii"),
         }
         if sha:

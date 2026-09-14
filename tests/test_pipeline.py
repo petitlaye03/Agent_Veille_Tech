@@ -2,6 +2,7 @@
 et de publication simulés, aucun appel réseau réel."""
 
 import textwrap
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -46,6 +47,52 @@ class _MessagesSimulees:
 class _ClientLLMSimule:
     def __init__(self):
         self.messages = _MessagesSimulees()
+
+
+class _ClientPublicationAvecEtat:
+    """Simule le client HTTP de `publish.py` **avec mémoire entre appels**
+    (Story 3.3) — contrairement à `_ClientPublicationSimule` (toujours 404
+    au `GET`, jamais de `sha` à réutiliser), celui-ci se comporte comme
+    l'API Contents de GitHub sur deux runs successifs : un contenu publié
+    par un `PUT` est retrouvé par le `GET` suivant, avec le `sha` que
+    GitHub aurait réellement renvoyé.
+
+    `sha` est un simple compteur global, pas un vrai hash de contenu
+    (simplification délibérée, sans conséquence : rien de ce que `publish.py`
+    fait ne dépend de la valeur du `sha`, seulement de sa présence/absence).
+    Statut HTTP réaliste (trouvé en revue) : 201 à la création, **200** à
+    la mise à jour — comme la vraie API Contents ; `publish.py` ne
+    distingue pas les deux aujourd'hui, mais la fidélité de la simulation
+    ne doit pas être surévaluée dans sa propre docstring pour autant."""
+
+    def __init__(self):
+        self.put_calls = []
+        self.closed = False
+        self._fichiers: dict[str, dict] = {}
+        self._compteur_sha = 0
+
+    def _chemin(self, url: str) -> str:
+        return url.split("/contents/", 1)[1]
+
+    def get(self, url):
+        fichier = self._fichiers.get(self._chemin(url))
+        if fichier is None:
+            return _FakeResponse(404)
+        return _FakeResponse(200, payload=fichier)
+
+    def put(self, url, json=None):
+        self.put_calls.append((url, json))
+        chemin = self._chemin(url)
+        creation = chemin not in self._fichiers
+        self._compteur_sha += 1
+        self._fichiers[chemin] = {
+            "content": json["content"],
+            "sha": f"sha-{self._compteur_sha}",
+        }
+        return _FakeResponse(201 if creation else 200)
+
+    def close(self):
+        self.closed = True
 
 
 class _FakeResponse:
@@ -225,6 +272,135 @@ def test_executer_tente_les_deux_publications_meme_si_l_une_echoue(tmp_path):
 
     assert reussite is False  # l'archive a échoué
     assert len(client_publication.put_calls) == 2  # les deux ont bien été tentées
+
+
+class _HorlogeFigee:
+    """Trouvé en revue (Story 3.3, convergence des 3 couches) : sans horloge
+    figée, deux runs qui chevaucheraient minuit UTC viseraient deux chemins
+    d'archive différents — le test perdrait alors sa prémisse (« même
+    date ») sans que rien ne le signale, un risque de fragilité rare mais
+    réel pour un test censé prouver l'absence de duplication."""
+
+    _MAINTENANT = datetime(2026, 9, 14, 22, 17, tzinfo=timezone.utc)
+
+    @classmethod
+    def now(cls, tz=None):
+        return cls._MAINTENANT
+
+
+def test_relancer_pour_la_meme_date_ecrase_au_lieu_de_dupliquer(tmp_path, monkeypatch):
+    """Story 3.3 (AC1/AC2) : deux runs successifs de `pipeline.executer()`
+    pour la même date ne doivent produire qu'une création suivie d'une
+    mise à jour — jamais deux créations (= deux fichiers). Le client à
+    état se comporte comme l'API Contents de GitHub réelle sur deux runs
+    successifs, contrairement à `_ClientPublicationSimule` (toujours 404),
+    qui ne peut jamais exercer le chemin « mise à jour »."""
+    monkeypatch.setattr(pipeline, "datetime", _HorlogeFigee)
+
+    sources_yaml = _sources_yaml(tmp_path)
+    client = _ClientPublicationAvecEtat()
+
+    # Espionne collect.collecter (trouvé en revue) : les deux runs
+    # produisent un contenu identique par construction (fixture statique),
+    # ce qui à lui seul ne prouve pas que le second run a vraiment
+    # recollecté plutôt que rejoué une sortie mise en cache.
+    appels_collecte = []
+    collecter_reel = pipeline.collect.collecter
+
+    def _collecter_espion(*args, **kwargs):
+        resultat = collecter_reel(*args, **kwargs)
+        appels_collecte.append(resultat)
+        return resultat
+
+    monkeypatch.setattr(pipeline.collect, "collecter", _collecter_espion)
+
+    premiere_reussite = pipeline.executer(
+        sources_path=sources_yaml, llm_client=_ClientLLMSimule(), publish_client=client
+    )
+    # État après le premier run : le `sha` que le second run doit retrouver
+    # et réutiliser — capturé ici, avant qu'il ne soit remplacé par le
+    # second run (le client à état ne garde que le `sha` le plus récent
+    # par chemin, comme le ferait réellement GitHub).
+    sha_apres_premier_run = {chemin: f["sha"] for chemin, f in client._fichiers.items()}
+
+    seconde_reussite = pipeline.executer(
+        sources_path=sources_yaml, llm_client=_ClientLLMSimule(), publish_client=client
+    )
+
+    assert premiere_reussite is True
+    assert seconde_reussite is True
+    assert len(appels_collecte) == 2  # vraie recollecte, pas une sortie rejouée
+    assert client.closed is False  # un client fourni explicitement n'est jamais fermé, même réutilisé
+
+    par_chemin = {}
+    for url, corps in client.put_calls:
+        par_chemin.setdefault(client._chemin(url), []).append(corps)
+
+    # 2 chemins (page + archive), exactement 2 PUT chacun (1 création + 1
+    # mise à jour) — jamais plus, ce qui signalerait une duplication.
+    assert len(par_chemin) == 2, f"{len(par_chemin)} chemin(s) publié(s) au lieu de 2 : {list(par_chemin)}"
+    for chemin, appels in par_chemin.items():
+        assert len(appels) == 2, f"{chemin} : {len(appels)} PUT au lieu de 2"
+        creation, mise_a_jour = appels
+        assert "sha" not in creation  # rien à écraser au premier run
+        # Le second run réutilise le sha renvoyé par le premier PUT de ce
+        # même chemin — la mise à jour, pas une création parallèle.
+        assert mise_a_jour["sha"] == sha_apres_premier_run[chemin]
+
+    # L'archive vise bien un seul chemin daté sur les deux runs (AC2) —
+    # jamais deux entrées pour la même date.
+    chemins_archive = [c for c in par_chemin if "/archive/" in c]
+    assert len(chemins_archive) == 1
+
+
+def test_relancer_apres_un_echec_partiel_n_ecrase_que_ce_qui_manquait(tmp_path, monkeypatch):
+    """Story 3.3 (AC1), scénario plus réaliste que « succès puis succès » :
+    la page se publie mais l'archive échoue au premier run (ex. panne
+    réseau ponctuelle) — la reprise doit mettre à jour la page (elle
+    existait déjà) et **créer** l'archive (elle n'a jamais réussi), jamais
+    dupliquer la page ni échouer à combler l'archive manquante."""
+    monkeypatch.setattr(pipeline, "datetime", _HorlogeFigee)
+    sources_yaml = _sources_yaml(tmp_path)
+
+    client = _ClientPublicationAvecEtat()
+    put_reel = client.put
+
+    def _put_qui_echoue_une_fois_sur_larchive(url, json=None):
+        if "/archive/" in url and not any("archive" in u for u, _ in client.put_calls):
+            client.put_calls.append((url, json))  # la tentative a bien eu lieu
+            return _FakeResponse(500)
+        return put_reel(url, json=json)
+
+    monkeypatch.setattr(client, "put", _put_qui_echoue_une_fois_sur_larchive)
+
+    premier_run = pipeline.executer(
+        sources_path=sources_yaml, llm_client=_ClientLLMSimule(), publish_client=client
+    )
+    assert premier_run is False  # l'archive a échoué
+
+    second_run = pipeline.executer(
+        sources_path=sources_yaml, llm_client=_ClientLLMSimule(), publish_client=client
+    )
+    assert second_run is True
+
+    par_chemin = {}
+    for url, corps in client.put_calls:
+        par_chemin.setdefault(client._chemin(url), []).append(corps)
+
+    # Page : 2 PUT (créée avec succès au 1er run, mise à jour au 2nd).
+    chemin_page = next(c for c in par_chemin if "/archive/" not in c)
+    assert len(par_chemin[chemin_page]) == 2
+    assert "sha" not in par_chemin[chemin_page][0]
+    assert "sha" in par_chemin[chemin_page][1]
+
+    # Archive : 2 tentatives de PUT (1 échouée au 1er run, jamais
+    # enregistrée côté serveur simulé, donc la 2ᵉ est aussi une création,
+    # pas une mise à jour) — mais une seule entrée finale, jamais deux.
+    chemin_archive = next(c for c in par_chemin if "/archive/" in c)
+    assert len(par_chemin[chemin_archive]) == 2
+    assert "sha" not in par_chemin[chemin_archive][0]
+    assert "sha" not in par_chemin[chemin_archive][1]  # toujours une création : le 1er a échoué côté serveur
+    assert len([c for c in par_chemin if "/archive/" in c]) == 1  # une seule entrée d'archive au final
 
 
 def test_un_echec_de_collecte_n_atteint_jamais_la_publication(tmp_path, monkeypatch):
