@@ -16,11 +16,14 @@ couplage à un dossier voisin supposé déjà cloné.
 import base64
 import logging
 import os
+import re
 import subprocess
 from datetime import date
 
 import httpx
 from dotenv import load_dotenv
+
+from veille.render import BANDEAU_ECHEC_DEBUT, BANDEAU_ECHEC_FIN
 
 logger = logging.getLogger(__name__)
 
@@ -121,12 +124,12 @@ def _sha_existant(client: httpx.Client, chemin: str) -> str | None:
     `chemin` (Story 1.9) : cette fonction sert aussi bien la page
     (`CHEMIN_PAGE`) que l'archive datée (`site/archive/YYYY-MM-DD.md`) —
     même mécanisme d'upsert par `sha` pour les deux (AD-9).
+
+    Délègue à `_charge_existante` (Story 3.2) — même requête `GET`/même
+    distinction 404, réutilisée aussi par `publier_bandeau_echec`.
     """
-    reponse = client.get(f"/repos/{PUBLISH_REPO}/contents/{chemin}")
-    if reponse.status_code == 404:
-        return None
-    reponse.raise_for_status()
-    return reponse.json().get("sha")
+    charge = _charge_existante(client, chemin)
+    return charge.get("sha") if charge is not None else None
 
 
 def _publier(chemin: str, contenu: str, client: httpx.Client | None, quoi: str, categorie: str) -> bool:
@@ -190,6 +193,113 @@ def publier_archive(markdown: str, date_digest: date, client: httpx.Client | Non
     return _publier(
         chemin, markdown, client, f"de l'archive du {date_digest.isoformat()}", categorie="archive"
     )
+
+
+def _charge_existante(client: httpx.Client, chemin: str) -> dict | None:
+    """`GET` bas niveau partagé par `_sha_existant` et `publier_bandeau_echec`
+    (correctif de revue — la version initiale de `publier_bandeau_echec`
+    dupliquait cette requête au lieu de la réutiliser, contrairement à ce
+    que sa docstring affirmait). `None` si le fichier n'existe pas encore
+    (404, pas une panne) ; toute autre erreur HTTP lève, isolée par l'appelant.
+    """
+    reponse = client.get(f"/repos/{PUBLISH_REPO}/contents/{chemin}")
+    if reponse.status_code == 404:
+        return None
+    reponse.raise_for_status()
+    return reponse.json()
+
+
+def publier_bandeau_echec(bandeau: str, client: httpx.Client | None = None) -> bool | None:
+    """Insère (ou remplace, AC4) `bandeau` dans la page déjà publiée, sans
+    perdre son contenu (Story 3.2, AC3).
+
+    Contrairement à `publier()`, ne régénère pas la page depuis zéro : lit
+    le HTML déjà publié, y patche le fragment `render.rendre_bandeau_echec`
+    entre les marqueurs stables, republie via le même mécanisme d'upsert
+    par `sha` que le reste de ce module. Isolation totale : ne lève jamais.
+
+    Valeur de retour à trois états (corrigé en revue — un simple `bool`
+    confondait deux situations distinctes) :
+    - `None` — aucune page déjà publiée à annoter (première nuit jamais
+      publiée avec succès) : pas une panne, rien à patcher, `main_bandeau_echec`
+      ne doit pas en faire un code de sortie non nul ;
+    - `False` — panne réelle (réseau, HTTP, contenu illisible) ;
+    - `True` — bandeau publié avec succès.
+    """
+    fourni = client is not None
+    resolu = client if fourni else _client()
+    if resolu is None:
+        return False
+
+    try:
+        charge = _charge_existante(resolu, CHEMIN_PAGE)
+        if charge is None:
+            logger.info(
+                "Aucune page déjà publiée à annoter d'un bandeau d'échec — "
+                "rien à faire (probablement la toute première nuit)."
+            )
+            return None
+        if not charge.get("content"):
+            # Contenu absent/vidé par l'API (ex. fichier trop volumineux
+            # pour être inclus en ligne, trouvé en revue) : une vraie panne,
+            # pas une absence de page — distincte du cas 404 ci-dessus.
+            raise ValueError("réponse GET sans champ 'content' exploitable")
+        html_existant = base64.b64decode(charge["content"]).decode("utf-8")
+
+        corps = {
+            "message": "Bandeau d'échec nocturne",
+            "content": base64.b64encode(
+                _inserer_bandeau(html_existant, bandeau).encode("utf-8")
+            ).decode("ascii"),
+        }
+        if charge.get("sha"):  # même garde que `_publier` — jamais `"sha": null`
+            corps["sha"] = charge["sha"]
+
+        reponse_put = resolu.put(f"/repos/{PUBLISH_REPO}/contents/{CHEMIN_PAGE}", json=corps)
+        reponse_put.raise_for_status()
+        return True
+    except httpx.HTTPError:
+        _avertir_echec_publication("du bandeau d'échec", categorie="bandeau")
+        return False
+    except Exception:  # noqa: BLE001 — isolation totale, même hors httpx.HTTPError
+        _avertir_echec_publication("du bandeau d'échec", categorie="bandeau")
+        return False
+    finally:
+        if not fourni:
+            resolu.close()
+
+
+_MOTIF_BANDEAU_ECHEC = re.compile(
+    re.escape(BANDEAU_ECHEC_DEBUT) + r".*?" + re.escape(BANDEAU_ECHEC_FIN), re.DOTALL
+)
+_MOTIF_BALISE_BODY = re.compile(r"<body[^>]*>", re.IGNORECASE)
+
+
+def _inserer_bandeau(html: str, bandeau: str) -> str:
+    """Remplace le bandeau déjà présent entre les marqueurs stables s'il y
+    en a un (idempotence, AC4 — plusieurs nuits d'échec consécutives ne
+    doivent jamais en empiler plusieurs), sinon l'insère juste après la
+    balise `<body>` (avec ou sans attributs — `<body>`/`<body class="...">`,
+    correctif de revue : un `str.replace("<body>", ...)` littéral aurait
+    raté toute balise portant un attribut). Si `<body...>` lui-même est
+    introuvable (page corrompue de façon inattendue), l'ajoute en tête
+    plutôt que de ne rien faire silencieusement.
+
+    `bandeau` est passé à `re.sub` via une fonction de remplacement plutôt
+    qu'une chaîne brute (correctif de revue) : une chaîne de remplacement
+    littérale ferait interpréter par `re` un `\\1`/`\\g<0>` qu'elle
+    contiendrait, une source d'erreur ou de corruption silencieuse sans
+    rapport avec le contenu réel du bandeau.
+    """
+    if _MOTIF_BANDEAU_ECHEC.search(html):
+        # Pas de `count=1` : si plusieurs paires de marqueurs existaient
+        # (ne devrait jamais arriver par ce code, mais auto-cicatrisant si
+        # une corruption externe en laissait plusieurs), toutes convergent
+        # vers le même contenu plutôt que d'en laisser une orpheline.
+        return _MOTIF_BANDEAU_ECHEC.sub(lambda _m: bandeau, html)
+    if _MOTIF_BALISE_BODY.search(html):
+        return _MOTIF_BALISE_BODY.sub(lambda m: f"{m.group(0)}\n{bandeau}", html, count=1)
+    return f"{bandeau}\n{html}"
 
 
 def _avertir_echec_publication(quoi: str, categorie: str) -> None:

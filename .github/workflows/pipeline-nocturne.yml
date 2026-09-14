@@ -94,3 +94,16 @@ jobs:
           # inadvertance avec le jeton ambiant que son nom évoque d'habitude.
           GITHUB_TOKEN: ${{ secrets.DIGEST_PUBLISH_TOKEN }}
         run: uv run python -m veille.pipeline
+
+      - name: Publier un bandeau d'échec si le pipeline a échoué
+        # failure() || cancelled() (pas failure() seul, corrigé en revue) :
+        # un job qui dépasse timeout-minutes est annulé par GitHub Actions
+        # (conclusion "cancelled"), pas marqué "failed" — failure() seul
+        # aurait donc raté précisément le scénario de timeout que ce step
+        # est censé couvrir, le seul cas d'infrastructure nommé
+        # explicitement par l'AC3 de la Story 3.2. Convergence des 3
+        # couches de revue sur ce point.
+        if: failure() || cancelled()
+        env:
+          GITHUB_TOKEN: ${{ secrets.DIGEST_PUBLISH_TOKEN }}
+        run: uv run python -m veille.pipeline --bandeau-echec

@@ -8,7 +8,7 @@ sur des `Entree` déjà produites par `filter.py`/`enrich/llm.py`.
 
 import logging
 import re
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -228,4 +228,49 @@ def rendre_markdown(entrees: list[Entree], date_generation: datetime) -> str:
         sections=sections,
         date_generation=date_generation,
         digest_vide=digest_vide,
+    )
+
+
+# Marqueurs stables délimitant le bandeau d'échec dans le HTML publié
+# (Story 3.2) — permettent à `publish.publier_bandeau_echec` de le
+# remplacer plutôt que de l'empiler sur plusieurs nuits d'échec
+# consécutives (AC4), sans dépendre d'un état persistant : le HTML publié
+# porte lui-même l'information de présence du bandeau.
+BANDEAU_ECHEC_DEBUT = "<!-- BANDEAU-ECHEC:DEBUT -->"
+BANDEAU_ECHEC_FIN = "<!-- BANDEAU-ECHEC:FIN -->"
+
+
+def rendre_bandeau_echec(date_echec: date) -> str:
+    """Fragment HTML signalant qu'aucune mise à jour n'a réussi cette
+    nuit-là (Story 3.2, AC3).
+
+    Ce n'est **pas** un document complet ni une page rendue par le chemin
+    normal (`rendre()`) : un run qui échoue avant `rendre()` n'a par
+    définition aucune `Entree` à lui donner. Ce fragment est destiné à être
+    inséré après coup dans le HTML déjà publié par
+    `publish.publier_bandeau_echec` — jamais rendu ni publié seul, donc pas
+    de passage par Jinja2/l'autoescape habituel de ce fichier. Sans risque
+    ici : `date_echec.strftime(...)` (déterministe) est la seule donnée
+    insérée, jamais de contenu de source externe.
+
+    Format de date (`%d/%m/%Y`, corrigé en revue) cohérent avec le reste du
+    site (`digest.html.j2` : « Généré le JJ/MM/AAAA à HH:MM ») — l'ISO 8601
+    initial (`AAAA-MM-JJ`) aurait juré visuellement avec le reste de la page.
+    Couleurs via `var(--bandeau-echec-bg)`/`var(--bandeau-echec-fg)`
+    (corrigé en revue) plutôt qu'en dur : ces variables sont déjà définies
+    dans le `<style>` de `digest.html.j2` (clair/sombre via
+    `prefers-color-scheme`, même système que `--recommandee-bg`) — le
+    fragment s'insère dans une page qui les a déjà en portée, pas de raison
+    de sortir de ce système de thème pour ce seul élément.
+    """
+    return (
+        f"{BANDEAU_ECHEC_DEBUT}\n"
+        '<div style="background:var(--bandeau-echec-bg);'
+        "color:var(--bandeau-echec-fg);padding:0.75rem 1rem;"
+        'border-radius:8px;margin:0 0 1rem;font-size:0.95rem;">\n'
+        f"⚠️ Pas de nouveau digest dans la nuit du {date_echec.strftime('%d/%m/%Y')} "
+        "— problème technique. Le digest ci-dessous reste le plus récent "
+        "disponible.\n"
+        "</div>\n"
+        f"{BANDEAU_ECHEC_FIN}"
     )

@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import httpx
+import pytest
 
 from veille import pipeline
 
@@ -224,6 +225,137 @@ def test_executer_tente_les_deux_publications_meme_si_l_une_echoue(tmp_path):
 
     assert reussite is False  # l'archive a échoué
     assert len(client_publication.put_calls) == 2  # les deux ont bien été tentées
+
+
+def test_un_echec_de_collecte_n_atteint_jamais_la_publication(tmp_path, monkeypatch):
+    """Story 3.2 (AC2) : un échec avant `rendre()` ne doit jamais atteindre
+    `publier()` — la page déjà publiée les nuits précédentes reste donc
+    intacte par construction. Vérifié ici pour `collecter()`, la toute
+    première étape."""
+    sources_yaml = _sources_yaml(tmp_path)
+    client_publication = _ClientPublicationSimule()
+
+    def _collecter_qui_leve(*args, **kwargs):
+        raise RuntimeError("collecte cassée")
+
+    monkeypatch.setattr(pipeline.collect, "collecter", _collecter_qui_leve)
+
+    reussite = pipeline.executer(
+        sources_path=sources_yaml,
+        llm_client=_ClientLLMSimule(),
+        publish_client=client_publication,
+    )
+
+    assert reussite is False
+    assert client_publication.put_calls == []
+
+
+def test_un_echec_d_enrichissement_n_atteint_jamais_la_publication(tmp_path, monkeypatch):
+    """Story 3.2 (AC2) : idem pour `enrichir()` — un échec après une
+    collecte réussie mais avant tout rendu ne doit toujours rien publier."""
+    sources_yaml = _sources_yaml(tmp_path)
+    client_publication = _ClientPublicationSimule()
+
+    def _enrichir_qui_leve(*args, **kwargs):
+        raise RuntimeError("enrichissement cassé")
+
+    monkeypatch.setattr(pipeline, "enrichir", _enrichir_qui_leve)
+
+    reussite = pipeline.executer(
+        sources_path=sources_yaml,
+        llm_client=_ClientLLMSimule(),
+        publish_client=client_publication,
+    )
+
+    assert reussite is False
+    assert client_publication.put_calls == []
+
+
+def test_un_echec_de_rendu_html_n_atteint_jamais_la_publication(tmp_path, monkeypatch):
+    """Story 3.2 (AC2) : idem pour `rendre()` — complète
+    `test_executer_ne_leve_pas_si_rendre_leve` (Story 1.9) avec l'assertion
+    qui manquait : aucune publication n'est tentée, pas seulement « le run
+    ne plante pas »."""
+    sources_yaml = _sources_yaml(tmp_path)
+    client_publication = _ClientPublicationSimule()
+
+    def _rendre_qui_leve(*args, **kwargs):
+        raise RuntimeError("template cassé")
+
+    monkeypatch.setattr(pipeline, "rendre", _rendre_qui_leve)
+
+    reussite = pipeline.executer(
+        sources_path=sources_yaml,
+        llm_client=_ClientLLMSimule(),
+        publish_client=client_publication,
+    )
+
+    assert reussite is False
+    assert client_publication.put_calls == []
+
+
+def test_main_bandeau_echec_appelle_render_puis_publish(monkeypatch):
+    """Story 3.2 : le point d'entrée dédié construit le fragment du jour
+    (`render.rendre_bandeau_echec`) puis le publie
+    (`publish.publier_bandeau_echec`) — ne passe jamais par `executer()`."""
+    appels = {}
+
+    def _rendre_bandeau_echec_espion(date_echec):
+        appels["date"] = date_echec
+        return "<!-- BANDEAU-ECHEC:DEBUT -->x<!-- BANDEAU-ECHEC:FIN -->"
+
+    def _publier_bandeau_echec_espion(bandeau):
+        appels["bandeau"] = bandeau
+        return True
+
+    monkeypatch.setattr(pipeline, "rendre_bandeau_echec", _rendre_bandeau_echec_espion)
+    monkeypatch.setattr(pipeline, "publier_bandeau_echec", _publier_bandeau_echec_espion)
+
+    with pytest.raises(SystemExit) as exc_info:
+        pipeline.main_bandeau_echec()
+
+    assert exc_info.value.code == 0
+    assert "date" in appels
+    assert appels["bandeau"] == "<!-- BANDEAU-ECHEC:DEBUT -->x<!-- BANDEAU-ECHEC:FIN -->"
+
+
+def test_main_bandeau_echec_sort_avec_un_code_non_nul_si_la_publication_echoue(monkeypatch):
+    monkeypatch.setattr(pipeline, "rendre_bandeau_echec", lambda d: "x")
+    monkeypatch.setattr(pipeline, "publier_bandeau_echec", lambda b: False)
+
+    with pytest.raises(SystemExit) as exc_info:
+        pipeline.main_bandeau_echec()
+
+    assert exc_info.value.code == 1
+
+
+def test_main_bandeau_echec_sort_avec_le_code_zero_si_rien_a_annoncer(monkeypatch):
+    """Trouvé en revue : `publier_bandeau_echec` renvoie `None` (pas
+    `False`) quand il n'y a aucune page déjà publiée à annoter — ce n'est
+    pas une panne, `main_bandeau_echec` ne doit pas en faire un run rouge
+    dans Actions."""
+    monkeypatch.setattr(pipeline, "rendre_bandeau_echec", lambda d: "x")
+    monkeypatch.setattr(pipeline, "publier_bandeau_echec", lambda b: None)
+
+    with pytest.raises(SystemExit) as exc_info:
+        pipeline.main_bandeau_echec()
+
+    assert exc_info.value.code == 0
+
+
+def test_main_bandeau_echec_ne_leve_jamais(monkeypatch):
+    """Même filet de sécurité que `executer()` (Story 1.9) : une exception
+    inattendue dégrade en code de sortie non nul, jamais une levée."""
+
+    def _rendre_qui_leve(date_echec):
+        raise RuntimeError("erreur inattendue")
+
+    monkeypatch.setattr(pipeline, "rendre_bandeau_echec", _rendre_qui_leve)
+
+    with pytest.raises(SystemExit) as exc_info:
+        pipeline.main_bandeau_echec()
+
+    assert exc_info.value.code == 1
 
 
 def test_executer_degrade_proprement_sans_client_llm_ni_jeton_de_publication(

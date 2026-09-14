@@ -4,7 +4,7 @@ import re
 from datetime import datetime, timezone
 
 from veille.models import Entree, Item
-from veille.render import rendre, rendre_markdown
+from veille.render import BANDEAU_ECHEC_DEBUT, BANDEAU_ECHEC_FIN, rendre, rendre_bandeau_echec, rendre_markdown
 
 DATE_GEN = datetime(2026, 8, 28, 22, 14, tzinfo=timezone.utc)
 
@@ -360,3 +360,22 @@ def test_rendre_markdown_url_avec_chevrons_bruts_n_emet_aucun_lien():
     md = rendre_markdown(entrees, DATE_GEN)
 
     assert "](<" not in md
+
+
+def test_rendre_bandeau_echec_contient_la_date_et_les_marqueurs():
+    from datetime import date
+
+    fragment = rendre_bandeau_echec(date(2026, 9, 15))
+
+    assert fragment.startswith(BANDEAU_ECHEC_DEBUT)
+    assert fragment.endswith(BANDEAU_ECHEC_FIN)
+    assert "15/09/2026" in fragment  # %d/%m/%Y, cohérent avec le reste du site
+
+
+def test_rendre_bandeau_echec_n_est_pas_un_document_complet():
+    from datetime import date
+
+    fragment = rendre_bandeau_echec(date(2026, 9, 15))
+
+    assert "<!doctype html>" not in fragment.lower()
+    assert "<body" not in fragment

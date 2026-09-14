@@ -14,6 +14,12 @@
     --border: #e2e2e2;
     --recommandee-bg: #fff8e1;
     --recommandee-border: #d9a520;
+    /* Bandeau d'échec (Story 3.2) — injecté après coup par
+       publish.py::_inserer_bandeau sur une page déjà publiée : ces
+       variables doivent donc rester stables, jamais renommées sans
+       adapter render.py::rendre_bandeau_echec en même temps. */
+    --bandeau-echec-bg: #f9d7d5;
+    --bandeau-echec-fg: #7a1f1f;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -25,6 +31,8 @@
       --border: #333333;
       --recommandee-bg: #2a2410;
       --recommandee-border: #caa53d;
+      --bandeau-echec-bg: #3a1f1f;
+      --bandeau-echec-fg: #f5b8b4;
     }
   }
   * { box-sizing: border-box; }

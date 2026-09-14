@@ -19,8 +19,8 @@ import httpx
 from veille import collect
 from veille.enrich.llm import enrichir, marquer_recommandation
 from veille.filter import charger_ponderations
-from veille.publish import publier, publier_archive
-from veille.render import rendre, rendre_markdown
+from veille.publish import publier, publier_archive, publier_bandeau_echec
+from veille.render import rendre, rendre_bandeau_echec, rendre_markdown
 
 logger = logging.getLogger(__name__)
 
@@ -115,5 +115,50 @@ def main() -> None:
     sys.exit(0 if reussite else 1)
 
 
+def main_bandeau_echec() -> None:
+    """Point d'entrée dédié (Story 3.2) : publie un bandeau honnête sur la
+    page déjà publiée, signalant l'absence de mise à jour cette nuit-là.
+
+    Invoqué **uniquement** par le step `if: failure() || cancelled()` du
+    workflow GitHub Actions (`.github/workflows/pipeline-nocturne.yml`),
+    jamais par `executer()`/`main()` eux-mêmes — un run qui échoue avant
+    `rendre()` n'a par construction aucune `Entree` à rendre, le bandeau
+    doit donc être ajouté après coup, sur le HTML déjà publié, par un
+    chemin entièrement distinct de celui du pipeline principal. Ne lève
+    jamais (même filet de sécurité que `executer()`).
+
+    Code de sortie (corrigé en revue — `publier_bandeau_echec` renvoie
+    maintenant `True`/`False`/`None`, trois états distincts) : non nul
+    seulement sur une **vraie** panne de publication (`False`) — visibilité
+    dans l'onglet Actions, comme pour le pipeline principal. `None`
+    (aucune page déjà publiée à annoter — probablement la toute première
+    nuit) sort avec **0** : ce n'est pas une panne au sens de
+    `publish.publier_bandeau_echec`, en faire un run rouge produirait une
+    fausse alerte systématique la toute première fois que le pipeline
+    échoue avant d'avoir jamais publié avec succès.
+    """
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
+    try:
+        aujourdhui = datetime.now(timezone.utc).date()
+        bandeau = rendre_bandeau_echec(aujourdhui)
+        resultat = publier_bandeau_echec(bandeau)
+    except Exception:  # noqa: BLE001 — filet de sécurité, même réflexe que executer()
+        logger.exception("Échec inattendu lors de la publication du bandeau d'échec.")
+        resultat = False
+
+    if resultat is None:
+        logger.info("Rien à annoter (aucune page déjà publiée) — pas une panne.")
+    elif not resultat:
+        logger.warning("Bandeau d'échec non publié.")
+
+    reussite = resultat is not False
+    sys.exit(0 if reussite else 1)
+
+
 if __name__ == "__main__":
-    main()
+    if "--bandeau-echec" in sys.argv[1:]:
+        main_bandeau_echec()
+    else:
+        main()

@@ -242,3 +242,161 @@ def test_echec_de_page_et_echec_d_archive_ont_chacun_leur_propre_trace_complete(
     # a été demandée pour cet appel (`logger.warning(msg, exc_info=True)`).
     records_avec_trace = [r for r in caplog.records if r.exc_info is not None]
     assert len(records_avec_trace) == 2
+
+
+# --- Bandeau d'échec (Story 3.2) ------------------------------------------
+
+
+def _page_publiee(html: str, sha: str = "sha-existant") -> _FakeResponse:
+    return _FakeResponse(
+        200,
+        payload={"content": base64.b64encode(html.encode("utf-8")).decode("ascii"), "sha": sha},
+    )
+
+
+def test_bandeau_echec_insere_apres_body_quand_absent():
+    html_existant = "<html><body>\n<h1>Digest du 14 septembre</h1>\n</body></html>"
+    client = _FakeClient(get_response=_page_publiee(html_existant), put_response=_FakeResponse(200))
+
+    reussite = publish.publier_bandeau_echec("<!-- BANDEAU-ECHEC:DEBUT -->x<!-- BANDEAU-ECHEC:FIN -->", client=client)
+
+    assert reussite is True
+    corps_publie = base64.b64decode(client.put_calls[0][1]["content"]).decode("utf-8")
+    assert "<!-- BANDEAU-ECHEC:DEBUT -->x<!-- BANDEAU-ECHEC:FIN -->" in corps_publie
+    assert "Digest du 14 septembre" in corps_publie  # contenu existant préservé
+    assert client.put_calls[0][1]["sha"] == "sha-existant"
+
+
+def test_bandeau_echec_remplace_plutot_que_d_empiler():
+    """AC4 : deux nuits d'échec consécutives ne doivent jamais empiler deux
+    bandeaux."""
+    ancien_bandeau = "<!-- BANDEAU-ECHEC:DEBUT -->ancien (nuit d'avant)<!-- BANDEAU-ECHEC:FIN -->"
+    html_existant = f"<html><body>\n{ancien_bandeau}\n<h1>Digest</h1>\n</body></html>"
+    client = _FakeClient(get_response=_page_publiee(html_existant), put_response=_FakeResponse(200))
+
+    nouveau_bandeau = "<!-- BANDEAU-ECHEC:DEBUT -->nouveau (cette nuit)<!-- BANDEAU-ECHEC:FIN -->"
+    publish.publier_bandeau_echec(nouveau_bandeau, client=client)
+
+    corps_publie = base64.b64decode(client.put_calls[0][1]["content"]).decode("utf-8")
+    assert corps_publie.count("BANDEAU-ECHEC:DEBUT") == 1
+    assert "ancien (nuit d'avant)" not in corps_publie
+    assert "nouveau (cette nuit)" in corps_publie
+    assert "<h1>Digest</h1>" in corps_publie  # contenu existant toujours préservé
+
+
+def test_bandeau_echec_sans_page_deja_publiee_ne_fait_rien():
+    """Première nuit jamais publiée avec succès : rien à annoter, pas une
+    panne — `None`, distinct de `False` (correctif de revue : une vraie
+    panne et « rien à faire » ne doivent pas partager le même signal)."""
+    client = _FakeClient(get_response=_FakeResponse(404))
+
+    resultat = publish.publier_bandeau_echec("<!-- BANDEAU-ECHEC:DEBUT --><!-- BANDEAU-ECHEC:FIN -->", client=client)
+
+    assert resultat is None
+    assert client.put_calls == []
+
+
+def test_bandeau_echec_insere_apres_une_balise_body_avec_attributs():
+    """Trouvé en revue : `<body class="...">`/`<body lang="fr">` etc. —
+    pas seulement la balise nue `<body>` que le premier jet ne matchait
+    que via `str.replace` littéral."""
+    html_existant = '<html><body class="sombre" data-theme="auto">\n<h1>Digest</h1>\n</body></html>'
+    client = _FakeClient(get_response=_page_publiee(html_existant), put_response=_FakeResponse(200))
+
+    publish.publier_bandeau_echec("<!-- BANDEAU-ECHEC:DEBUT -->x<!-- BANDEAU-ECHEC:FIN -->", client=client)
+
+    corps_publie = base64.b64decode(client.put_calls[0][1]["content"]).decode("utf-8")
+    assert '<body class="sombre" data-theme="auto">\n<!-- BANDEAU-ECHEC:DEBUT -->x<!-- BANDEAU-ECHEC:FIN -->' in corps_publie
+    assert "<h1>Digest</h1>" in corps_publie
+
+
+def test_bandeau_echec_sans_balise_body_du_tout_ne_perd_pas_le_contenu():
+    """Trouvé en revue : chemin de repli jusque-là non testé. Une page
+    corrompue de façon inattendue (pas de `<body>`) ne doit toujours pas
+    perdre son contenu — le bandeau est ajouté en tête plutôt que rien."""
+    html_existant = "<p>Contenu sans structure de page complète</p>"
+    client = _FakeClient(get_response=_page_publiee(html_existant), put_response=_FakeResponse(200))
+
+    publish.publier_bandeau_echec("<!-- BANDEAU-ECHEC:DEBUT -->x<!-- BANDEAU-ECHEC:FIN -->", client=client)
+
+    corps_publie = base64.b64decode(client.put_calls[0][1]["content"]).decode("utf-8")
+    assert corps_publie.startswith("<!-- BANDEAU-ECHEC:DEBUT -->x<!-- BANDEAU-ECHEC:FIN -->")
+    assert "Contenu sans structure de page complète" in corps_publie
+
+
+def test_bandeau_echec_avec_un_antislash_ne_leve_pas_et_ne_corrompt_pas(monkeypatch):
+    """Trouvé en revue : `re.sub` interprète `\\1`/`\\g<0>` dans une chaîne
+    de remplacement littérale — un bandeau qui en contiendrait aurait pu
+    lever `re.error` ou corrompre le HTML publié. Reproduit sur le
+    remplacement (bandeau déjà présent), le chemin où `re.sub` reçoit un
+    texte de remplacement plutôt qu'une simple insertion."""
+    ancien_bandeau = "<!-- BANDEAU-ECHEC:DEBUT -->ancien<!-- BANDEAU-ECHEC:FIN -->"
+    html_existant = f"<html><body>\n{ancien_bandeau}\n</body></html>"
+    client = _FakeClient(get_response=_page_publiee(html_existant), put_response=_FakeResponse(200))
+
+    bandeau_avec_antislash = r"<!-- BANDEAU-ECHEC:DEBUT -->C:\1\dossier<!-- BANDEAU-ECHEC:FIN -->"
+    reussite = publish.publier_bandeau_echec(bandeau_avec_antislash, client=client)
+
+    assert reussite is True
+    corps_publie = base64.b64decode(client.put_calls[0][1]["content"]).decode("utf-8")
+    assert r"C:\1\dossier" in corps_publie
+
+
+def test_bandeau_echec_sha_absent_n_est_jamais_envoye_comme_null():
+    """Trouvé en revue : `_publier()` n'inclut `sha` que s'il est présent
+    (`if sha: ...`) — `publier_bandeau_echec` doit suivre la même garde,
+    pas envoyer `"sha": null` sans discernement."""
+    payload_sans_sha = {"content": base64.b64encode(b"<html><body></body></html>").decode("ascii")}
+    client = _FakeClient(get_response=_FakeResponse(200, payload=payload_sans_sha), put_response=_FakeResponse(200))
+
+    publish.publier_bandeau_echec("<!-- BANDEAU-ECHEC:DEBUT --><!-- BANDEAU-ECHEC:FIN -->", client=client)
+
+    assert "sha" not in client.put_calls[0][1]
+
+
+def test_bandeau_echec_contenu_illisible_est_une_vraie_panne():
+    """Trouvé en revue : un `content` absent/vidé par l'API (ex. fichier
+    trop volumineux) doit être une vraie panne (`False`), pas confondu avec
+    l'absence de page (`None`)."""
+    payload_sans_content = {"sha": "sha-existant"}
+    client = _FakeClient(get_response=_FakeResponse(200, payload=payload_sans_content))
+
+    resultat = publish.publier_bandeau_echec("<!-- BANDEAU-ECHEC:DEBUT --><!-- BANDEAU-ECHEC:FIN -->", client=client)
+
+    assert resultat is False
+
+
+def test_bandeau_echec_bout_en_bout_avec_le_vrai_fragment_rendu():
+    """Trouvé en revue : aucun test ne combinait le vrai
+    `render.rendre_bandeau_echec` avec `publish.publier_bandeau_echec` —
+    une dérive du format des marqueurs entre les deux modules serait passée
+    inaperçue (chacun testé isolément avec des marqueurs écrits à la main)."""
+    from veille.render import rendre_bandeau_echec
+
+    html_existant = "<html><body>\n<h1>Digest</h1>\n</body></html>"
+    client = _FakeClient(get_response=_page_publiee(html_existant), put_response=_FakeResponse(200))
+
+    fragment_reel = rendre_bandeau_echec(date(2026, 9, 14))
+    reussite = publish.publier_bandeau_echec(fragment_reel, client=client)
+
+    assert reussite is True
+    corps_publie = base64.b64decode(client.put_calls[0][1]["content"]).decode("utf-8")
+    assert "14/09/2026" in corps_publie
+    assert "<h1>Digest</h1>" in corps_publie
+
+
+def test_bandeau_echec_degrade_proprement_sans_jeton(monkeypatch):
+    monkeypatch.setattr(publish, "_jeton_depuis_env", lambda: None)
+    monkeypatch.setattr(publish, "_jeton_depuis_gh_cli", lambda: None)
+
+    reussite = publish.publier_bandeau_echec("<!-- BANDEAU-ECHEC:DEBUT --><!-- BANDEAU-ECHEC:FIN -->")
+
+    assert reussite is False
+
+
+def test_bandeau_echec_degrade_proprement_sur_panne_reseau():
+    client = _FakeClient(get_leve=httpx.ConnectError("panne réseau"))
+
+    reussite = publish.publier_bandeau_echec("<!-- BANDEAU-ECHEC:DEBUT --><!-- BANDEAU-ECHEC:FIN -->", client=client)
+
+    assert reussite is False
