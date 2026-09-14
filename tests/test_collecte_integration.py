@@ -100,6 +100,117 @@ class TestDedoublonnageEffectif:
         collectes = sum(r.nb_items for r in resultat.rapports)
         assert len(resultat.items) + resultat.dedoublonnage.total_ecartes == collectes
 
+    def test_le_dedoublonnage_fonctionne_entre_deux_types_de_connecteurs(self, tmp_path):
+        """Story 2.4 (AC1) : jusqu'ici, seul le cas RSS+RSS (même flux
+        dupliqué) était vérifié par le chemin réel — `normaliser_url` agit
+        sur la chaîne d'URL seule, sans jamais regarder le type d'origine,
+        mais rien ne le confirmait de bout en bout entre deux types.
+        `json-source` pointe (via `mapping.url`) vers la même URL cible que
+        le premier item de `sample_feed.xml`."""
+        api = tmp_path / "api.json"
+        api.write_text(
+            json.dumps(
+                [{"id": "abc-1", "titre": "Reprise JSON", "url": "https://example.invalid/articles/premier"}]
+            ),
+            encoding="utf-8",
+        )
+
+        socle = _socle(
+            tmp_path,
+            f"""
+            sources:
+              - id: source-rss
+                type: rss
+                url: {(FIXTURE_DIR / "sample_feed.xml").as_posix()}
+                langue: fr
+                registre: apprendre
+                priorite: 1
+              - id: source-json
+                type: json
+                url: {api.as_uri()}
+                langue: fr
+                registre: apprendre
+                priorite: 9
+                mapping:
+                  guid: id
+                  titre: titre
+                  url: url
+            """,
+        )
+
+        resultat = collecter(socle)
+
+        # sample_feed.xml porte 2 items, api.json en porte 1 (doublon du
+        # premier) : 3 collectés, 2 restent après dédoublonnage inter-types.
+        collectes = sum(r.nb_items for r in resultat.rapports)
+        assert collectes == 3
+        assert len(resultat.items) == 2
+        # La source json (priorité 9) gagne l'arbitrage sur la source rss
+        # (priorité 1) — même mécanisme que le cas RSS+RSS déjà testé.
+        gagnant = next(
+            (i for i in resultat.items if i.url == "https://example.invalid/articles/premier"), None
+        )
+        assert gagnant is not None, "l'article dupliqué a disparu, pas seulement changé de source_id"
+        assert gagnant.source_id == "source-json"
+        # La couche de comptage (celle qu'un opérateur consulte réellement,
+        # via `resume()`) doit elle aussi attribuer correctement le doublon
+        # — trouvé en revue : le test initial ne vérifiait que la liste
+        # finale, jamais le rapport de dédoublonnage lui-même.
+        assert resultat.dedoublonnage.ecartes_par_source == {"source-rss": 1}
+        assert resultat.dedoublonnage.gagnants_par_source == {"source-json": 1}
+
+    def test_le_dedoublonnage_fonctionne_entre_scrape_et_rss(self, tmp_path):
+        """Story 2.4 (AC1), correctif de revue : le cas `rss`+`json` ne
+        suffit pas à verrouiller « y compris entre deux sources de types
+        différents (rss/json/scrape) » à la lettre — `scrape` est le
+        connecteur le plus divergent (son `guid` vaut toujours son URL
+        résolue, et il applique déjà sa propre déduplication intra-page
+        avant que l'item n'atteigne `dedup.py`) et le seul des trois jamais
+        exercé dans un scénario inter-types jusqu'ici. C'est aussi la seule
+        combinaison que l'exécution réelle (Task 3) ne peut structurellement
+        jamais observer : le socle réel ne compte qu'une seule source
+        `scrape` (`anthropic-news`)."""
+        page = tmp_path / "news.html"
+        page.write_text(
+            '<a href="/articles/premier"><h2>Reprise scrapée</h2>'
+            '<time datetime="2026-07-24">24 juillet 2026</time></a>',
+            encoding="utf-8",
+        )
+
+        socle = _socle(
+            tmp_path,
+            f"""
+            sources:
+              - id: source-rss
+                type: rss
+                url: {(FIXTURE_DIR / "sample_feed.xml").as_posix()}
+                langue: fr
+                registre: apprendre
+                priorite: 1
+              - id: source-scrape
+                type: scrape
+                url: {page.as_uri()}
+                langue: fr
+                registre: apprendre
+                priorite: 9
+                selecteur: /articles/
+                base_url: https://example.invalid
+            """,
+        )
+
+        resultat = collecter(socle)
+
+        collectes = sum(r.nb_items for r in resultat.rapports)
+        assert collectes == 3
+        assert len(resultat.items) == 2
+        gagnant = next(
+            (i for i in resultat.items if i.url == "https://example.invalid/articles/premier"), None
+        )
+        assert gagnant is not None
+        assert gagnant.source_id == "source-scrape"
+        assert resultat.dedoublonnage.ecartes_par_source == {"source-rss": 1}
+        assert resultat.dedoublonnage.gagnants_par_source == {"source-scrape": 1}
+
 
 class TestScoringEffectif:
     """Tue le mutant « classement court-circuité » (Task 5, Story 1.4) :
