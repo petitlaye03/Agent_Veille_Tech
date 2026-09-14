@@ -8,9 +8,9 @@
 > code, pas un instantané figé. La §10 (Référence technique) en particulier
 > doit être corrigée dès qu'un fichier qu'elle décrit change de comportement.
 >
-> **Dernière mise à jour :** 2026-09-14, fin de la Story 2.4 (dev + revue) — **Epic 2 entièrement terminé**.
-> **Story courante :** aucune (2.4 terminée, `done`).
-> **Prochaine étape :** Epic 3 (génération nocturne automatique), Story 3.1 — voir §11.
+> **Dernière mise à jour :** 2026-09-14, fin de la Story 3.1 (dev + revue) — **Epic 3 démarré**.
+> **Story courante :** aucune (3.1 terminée, `done`).
+> **Prochaine étape :** Story 3.2 (reprendre proprement après un échec) — voir §11.
 
 ---
 
@@ -85,7 +85,7 @@ Projet mené en méthode **BMAD** : brief → PRD → architecture → epics/sto
 |---|---|---|
 | **Epic 1** | Un premier digest, réel, bout en bout (3-5 sources) | ✅ **Terminé** — Stories 1.1-1.9 toutes `done` |
 | **Epic 2** | Socle élargi (15-20 sources) et robustesse aux pannes | ✅ **Terminé** — Stories 2.1-2.4 toutes `done` |
-| **Epic 3** | Génération nocturne automatique | ⏳ Pas commencé |
+| **Epic 3** | Génération nocturne automatique | 🟡 En cours — Story 3.1 `done`, 3.2/3.3/3.4 à faire |
 | **Epic 4** | Santé des sources et découverte de nouvelles sources | ⏳ Pas commencé |
 
 ### Détail Epic 1
@@ -114,6 +114,12 @@ Projet mené en méthode **BMAD** : brief → PRD → architecture → epics/sto
 | 2.4 | Dédoublonner à l'échelle du socle complet | ✅ `done` | 350 → **353** |
 
 **Total tests actuel : 353, tous verts** (`uv run pytest`).
+
+### Détail Epic 3
+
+| Story | Titre | Statut | Tests |
+|---|---|---|---|
+| 3.1 | Déclencher le pipeline automatiquement chaque nuit | ✅ `done` | 353 (inchangé — workflow YAML, pas de code Python) |
 
 ## 6. Ce qui est livré, story par story
 
@@ -263,6 +269,18 @@ Deux garde-fous ajoutés : un test réel de dédoublonnage inter-types (`rss`+`j
 
 **Epic 2 est maintenant entièrement terminé** (Stories 2.1 à 2.4, toutes `done`) : socle à 17 sources, isolation de panne durcie (timeout RSS, détection d'anomalie majoritaire), backoff sur limite de débit, dédoublonnage revérifié à l'échelle.
 
+### 6.14 — Story 3.1 : déclencher le pipeline automatiquement chaque nuit — Epic 3 démarré
+
+Première story de l'Epic 3. **Amendement d'architecture avant tout code** (même patron que l'amendement AD-4 de la Story 1.4) : le PRD/`ARCHITECTURE-SPINE.md` prévoyaient le Planificateur de tâches Windows sur le PC d'Abdoulaye, mais le PC de développement a migré vers Mac depuis (§9, 2026-08-27). L'architecture elle-même anticipait déjà ce cas — « repli GitHub Actions... si le PC allumé la nuit devient une contrainte » — confirmé par Abdoulaye (`AskUserQuestion`) comme le mécanisme retenu : aucune machine à laisser allumée le soir.
+
+Nouveau fichier `.github/workflows/pipeline-nocturne.yml` : déclencheur `cron` (~22h Dakar = 22h UTC, pas de changement d'heure) et `workflow_dispatch` pour un déclenchement manuel. Un jeton distinct de celui fourni nativement par Actions est nécessaire : `secrets.GITHUB_TOKEN` natif est scopé au dépôt courant, alors que `publish.py` écrit sur un **second** dépôt (le dépôt de sortie public) — un `DIGEST_PUBLISH_TOKEN` dédié (PAT à créer par Abdoulaye) est mappé sur la variable d'environnement `GITHUB_TOKEN` que `publish.py` attend déjà, sans modifier ce fichier. Aucune ligne de `src/veille/` touchée — le code de sortie non nul de `main()` (déjà en place depuis la Story 1.8) suffit à ce que GitHub Actions détecte nativement un run en échec.
+
+**Revue de code (Sonnet 5)** — malgré un diff réduit à un seul fichier YAML, les 3 couches ont convergé indépendamment sur un trio de manques de durcissement CI : aucun `concurrency` group (un déclenchement manuel, ajouté précisément pour tester sans attendre 22h, pouvait chevaucher le run programmé et faire courir deux upserts par `sha` en parallèle sur le dépôt de sortie) ; aucun `timeout-minutes` (un run bloqué pouvait occuper le plafond par défaut de GitHub Actions, le risque même que ce rapport documente déjà comme dette) ; et la désactivation silencieuse par GitHub d'un déclencheur `schedule` après 60 jours d'inactivité du dépôt, non contournable par la configuration seule (documentée, pas corrigée). L'Acceptance Auditor a trouvé, lui, un vrai critère d'acceptation disparu : la story source (`epics.md`) exige explicitement « la page publiée est à jour avant 7h38 » — silencieusement absent de la liste d'AC finale de la première rédaction, réintégré avec un raisonnement de marge (~9h20 entre le déclenchement et l'échéance). Durcissement supplémentaire appliqué : actions épinglées par SHA de commit réel (vérifié par `git ls-remote`, pas inventé) plutôt que par tag flottant — ce job manipule un jeton à droits d'écriture cross-repo — `permissions: contents: read` en moindre privilège, et `uv sync --locked` (pas `--frozen`) pour échouer explicitement sur toute dérive du verrou plutôt que de l'installer silencieusement.
+
+8 correctifs, 1 report (désactivation à 60 jours, non contournable proprement), 3 rejets. 353 tests (inchangé — aucun code Python touché). Détail complet : [3-1-declencher-automatiquement.md](../_bmad-output/implementation-artifacts/3-1-declencher-automatiquement.md).
+
+**Limite assumée, comme pour `publish.py`/`enrich/llm.py` depuis l'Epic 1** : ce workflow ne peut pas être validé par une exécution programmée réellement réussie tant que les secrets du dépôt (`ANTHROPIC_API_KEY`, `DIGEST_PUBLISH_TOKEN`) n'ont pas été ajoutés et que le dépôt de sortie public n'existe pas — trois actions réelles sous le compte d'Abdoulaye, différées, à confirmer explicitement avant exécution.
+
 ## 7. Journal des décisions structurantes (cumulatif)
 
 Ce journal ne répète pas le détail des stories (§6) ; il ne garde que ce qui **contraint les stories suivantes**.
@@ -307,12 +325,19 @@ Ce journal ne répète pas le détail des stories (§6) ; il ne garde que ce qui
 38. **Un mécanisme neuf partagé par plusieurs points d'appel doit être vérifié de bout en bout à travers chacun, pas seulement à travers le premier qui vient à l'esprit** — le backoff de la Story 2.3 était exhaustivement testé en isolation (`_reseau.py`) et à travers `rss_connector.py`, mais jamais à travers `json_connector.py`/`scrape_connector.py`, alors que l'AC affirmait explicitement le mécanisme « partagé par les trois connecteurs ». Une couverture unitaire complète du composant partagé ne remplace pas une couverture d'intégration par appelant (Story 2.3, trouvé en revue — convergence Blind Hunter + Acceptance Auditor).
 39. **Un test qui ne fonctionne que grâce à un détail d'implémentation non garanti (ici : que deux modules important la même bibliothèque partagent le même objet singleton) doit cibler directement le point où l'effet a lieu, pas un raccourci qui marche par accident aujourd'hui** — les tests d'intégration ajoutés en Story 2.3 monkeypatchaient `rss_connector.httpx` en s'appuyant implicitement sur le fait que `httpx` est un module `sys.modules` partagé avec `_reseau.py` ; reciblés sur `_reseau.httpx` directement, la référence réellement appelée. Les tests **existants** de la Story 2.2, eux, continuent légitimement de s'appuyer sur ce couplage (documenté, vérifié, nécessaire pour ne pas les modifier) — la distinction est entre *découvrir* qu'un raccourci fonctionne et *choisir délibérément* de le garder pour une raison précise (Story 2.3, trouvé en revue).
 40. **Un test « à l'échelle » doit stresser la propriété qui justifie le choix de conception, pas seulement son volume** — le jeu de données du test de performance de `dedupliquer()` (Story 2.4) posait `guid == url` par défaut (commodité de l'utilitaire de test) et ne liait les classes que par paires ; or la raison d'être documentée de l'union-find (plutôt qu'une comparaison par paires) est précisément la transitivité (« A et B partagent une URL, B et C un guid, donc A, B, C sont le même article »), jamais exercée à volume avant cette story. Un grand nombre d'items qui passent tous par le même chemin dégénéré (paires simples, un seul signal d'identité) ne prouve rien sur le chemin qui a motivé la conception (Story 2.4, trouvé en revue).
+41. **Un amendement d'architecture reste nécessaire même quand le changement « semble » cosmétique (un déclencheur, pas une règle)** — le PRD/`ARCHITECTURE-SPINE.md` prévoyaient le Planificateur Windows ; la migration Mac (§9) l'a rendu obsolète. L'architecture avait heureusement déjà anticipé ce cas précis (repli GitHub Actions documenté à l'avance) — mais la story elle-même (Story 3.1) a quand même dû trancher explicitement avec Abdoulaye plutôt que de supposer le repli déjà « automatiquement » applicable : un amendement anticipé dans la documentation n'équivaut pas à une décision prise, seulement à une option préparée (Story 3.1).
+42. **Un jeton nommé comme le jeton ambiant d'une plateforme, mais porteur de droits différents, doit rester scopé au plus petit périmètre possible** — le workflow de la Story 3.1 mappe un PAT personnel à droits d'écriture cross-repo sur la variable `GITHUB_TOKEN` (le nom que `publish.py` attend déjà, inchangé), alors que ce nom désigne d'ordinaire le jeton ambiant, plus faible, fourni nativement par GitHub Actions. Scopé au seul step qui en a besoin (pas au job entier) : un futur step ajouté au même job n'hérite de rien tant qu'il ne redéclare pas explicitement ce nom — la réutilisation du nom reste un piège nommé, mais son rayon d'action est contenu par construction (Story 3.1, trouvé en revue).
+43. **Un job CI qui manipule un secret à portée élargie (écriture sur un autre dépôt) mérite un durcissement au-delà du strict nécessaire fonctionnel** — épingler les actions tierces par SHA de commit plutôt que par tag flottant, un bloc `permissions` explicite en moindre privilège, un `concurrency` group et un `timeout-minutes` n'étaient demandés par aucun AC de la Story 3.1, mais découlent directement de la présence d'un jeton à droits d'écriture cross-repo dans ce job — le niveau de rigueur attendu d'un composant dépend de ce qu'il peut faire de mal, pas seulement de ce qu'on lui demande de faire de bien (Story 3.1, trouvé en revue, 3 couches convergentes sur `concurrency`/`timeout-minutes`).
 
 ## 8. Dette technique et travail reporté
 
 Liste vivante complète : [deferred-work.md](../_bmad-output/implementation-artifacts/deferred-work.md). Résumé de ce qui reste ouvert, par destination :
 
 **Epic 2 (socle élargi, robustesse)** — distinction 404 vs flux malformé, plafond de taille des réponses HTTP, mode d'extraction « carte » pour le scraping (titre/date en frères de l'ancre, pas en descendants — bloque l'ajout de la plupart des blogs WordPress), en-têtes/authentification pour les API JSON (bloque Kaggle, prévu au socle v1 mais toujours pas construit — la Story 2.1 a explicitement laissé Kaggle de côté pour cette raison), `url_modele` limité à `{guid}`.
+
+**Trouvé en Story 3.1, reporté** :
+- **GitHub désactive silencieusement un déclencheur `schedule` après 60 jours sans activité de commit sur le dépôt** — aucun run, aucune erreur visible nulle part (`workflow_dispatch` reste fonctionnel). Pas de contournement propre par la configuration du workflow seule. À surveiller si le rythme de commits ralentit durablement.
+- **Trois prérequis réels non résolus avant que `pipeline-nocturne.yml` puisse réussir en conditions réelles** : secrets `ANTHROPIC_API_KEY`/`DIGEST_PUBLISH_TOKEN` non créés, dépôt de sortie public toujours inexistant — mêmes actions réelles déjà différées depuis l'Epic 1 (§9).
 
 **Dette fermée en Story 2.1** : ~~`config/sources.yaml` ne déclare aucune source en registre `pour_le_metier`~~ — 2 sources ajoutées (`decideo`, `lemonde-informatique`), la 3ᵉ section du digest reçoit désormais des items réels.
 
@@ -355,7 +380,7 @@ Liste vivante complète : [deferred-work.md](../_bmad-output/implementation-arti
 - le `.git` était resté à la racine de `Projets_Perso/` (englobant à tort `Saas_chatbots/`, un projet distinct) — déplacé dans `Agent_veille_tech/.git` pour que ce dossier soit son propre dépôt, aligné sur le remote `petitlaye03/Agent_Veille_Tech` ;
 - `.venv` était un venv Windows inutilisable (`home = C:\Program Files\Python311`) — supprimé et reconstruit avec `uv sync` (`uv` installé via Homebrew, absent du Mac).
 
-**État actuel** : dépôt propre (Stories 1.4 à 1.9 committées et poussées — Epic 1 entièrement terminé ; Stories 2.1 à 2.4 committées et poussées — **Epic 2 entièrement terminé**). Convention établie depuis la Story 1.4 : chaque story terminée (dev + revue) est commitée et poussée dans la foulée (implémentation+revue, puis rapport de projet en commit séparé), sans confirmation supplémentaire par story. Les dossiers `_bmad/`, `.claude/`, `_bmad-output/` sont suivis par git depuis le 2026-08-28 (réintégrés une fois le dépôt confirmé privé et le contenu relu — voir commit dédié entre les Stories 1.7 et 1.8).
+**État actuel** : dépôt propre (Stories 1.4 à 1.9 committées et poussées — Epic 1 entièrement terminé ; Stories 2.1 à 2.4 committées et poussées — Epic 2 entièrement terminé ; Story 3.1 committée et poussée — **Epic 3 démarré**). `.github/workflows/pipeline-nocturne.yml` (Story 3.1) est le premier fichier de ce dépôt hors `src/`/`tests/`/`config/`/`templates/`/`_bmad-output/`/`docs/`. Convention établie depuis la Story 1.4 : chaque story terminée (dev + revue) est commitée et poussée dans la foulée (implémentation+revue, puis rapport de projet en commit séparé), sans confirmation supplémentaire par story. Les dossiers `_bmad/`, `.claude/`, `_bmad-output/` sont suivis par git depuis le 2026-08-28 (réintégrés une fois le dépôt confirmé privé et le contenu relu — voir commit dédié entre les Stories 1.7 et 1.8).
 
 **Secrets** : `ANTHROPIC_API_KEY` (`.env`, voir `.env.example`) — nécessaire pour que `enrich/llm.py` génère de vraies accroches. Aucune clé fournie à ce jour. `GITHUB_TOKEN` (Story 1.8, optionnel) — `publish.py` réutilise en repli la session `gh` déjà authentifiée localement (`gh auth token`) si cette variable est absente.
 
@@ -592,9 +617,11 @@ Point d'entrée unique : `collecter()` → `enrichir()` → `marquer_recommandat
 
 ## 11. Prochaine étape
 
-**Epic 1 et Epic 2 sont entièrement terminés.** Epic 1 (Stories 1.1-1.9) : le pipeline complet existe, de la collecte à la double publication (page + archive), à l'échelle réduite visée (3-5 sources). Epic 2 (Stories 2.1-2.4) : socle porté à 17 sources, isolation de panne durcie sur les 3 connecteurs (timeout, détection d'anomalie majoritaire, backoff sur 429), dédoublonnage revérifié à l'échelle. Reste dans le passé, plus rien à faire dans l'Epic 2.
+**Epic 1 et Epic 2 sont entièrement terminés.** Epic 1 (Stories 1.1-1.9) : le pipeline complet existe, de la collecte à la double publication (page + archive), à l'échelle réduite visée (3-5 sources). Epic 2 (Stories 2.1-2.4) : socle porté à 17 sources, isolation de panne durcie sur les 3 connecteurs (timeout, détection d'anomalie majoritaire, backoff sur 429), dédoublonnage revérifié à l'échelle. **Epic 3 est démarré** : Story 3.1 (`done`) ajoute le déclencheur nocturne (GitHub Actions, amendement d'architecture par rapport au Planificateur Windows prévu à l'origine — PC de dev migré sur Mac).
 
-- **Epic 3 — Génération nocturne automatique (prochaine étape choisie).** Rend le pipeline réellement autonome (ordonnancement, idempotence du job, état « déjà vu » validé après publication) — le bénéfice le plus visible au quotidien (Abdoulaye n'a plus rien à déclencher), mais suppose `store.py`/SQLite (AD-5) encore à construire. Prérequis aussi pour évaluer sur plusieurs nuits deux incertitudes trouvées en Story 2.1 (rendement réel de `pour_le_metier`, réglage du seuil Hacker News).
+- **Story 3.2 — Reprendre proprement après un échec (prochaine étape).** Suppose `store.py`/SQLite (AD-5, toujours à construire) : l'état « déjà vu » ne doit être validé qu'après une publication réussie (AD-11), pour qu'un run qui échoue entre la collecte et la publication ne perde aucun item à la reprise.
+- **Story 3.3 — Relancer sans jamais dupliquer.** Upsert par date déjà en place pour la page/l'archive (AD-9, Story 1.9) — à revérifier explicitement pour une relance le même jour.
+- **Story 3.4 — Ne jamais remontrer un item déjà publié.** Ferme la boucle de l'état « déjà vu » commencée en 3.2 — dépend directement de `store.py`.
 - **Epic 4 — Santé des sources et découverte.** Le moins urgent tant que le socle reste petit et géré manuellement.
 
 **Avant l'un ou l'autre, ou en parallèle** : créer le second dépôt GitHub public de sortie et y activer GitHub Pages (+ `.nojekyll`) — seule chose qui manque pour valider `publish.py` (page et archive) contre l'API réelle plutôt qu'en dégradation simulée. Et dès qu'une clé `ANTHROPIC_API_KEY` sera fournie : valider `enrich/llm.py` contre l'API véritable (langue, longueur, coût mesuré) — déjà branché dans un run réel depuis la Story 1.8, seule la validation manque.
