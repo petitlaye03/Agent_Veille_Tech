@@ -133,6 +133,21 @@ def ouvrir(chemin: str | Path | None = None) -> sqlite3.Connection:
         "etat TEXT NOT NULL DEFAULT 'active'"
         ")"
     )
+    # Migration additive (Story 4.2, FR-13) : un fichier déjà synchronisé
+    # créé par une version antérieure du code n'a pas cette colonne —
+    # `ALTER TABLE ... ADD COLUMN` l'ajoute sans perdre les lignes
+    # existantes. Vérifié via `PRAGMA table_info` plutôt qu'un
+    # `try/except` sur le message d'erreur (corrigé en revue — trouvé par
+    # l'Edge Case Hunter) : un `try/except sqlite3.OperationalError` qui ne
+    # distingue « colonne déjà là » d'une vraie panne (ex. verrou) que par
+    # un texte d'erreur ferait exécuter `ALTER TABLE` à **chaque** appel
+    # d'`ouvrir()`, pas seulement la première fois — et ferait planter le
+    # chemin nocturne normal sur toute erreur au message différent. Ici,
+    # l'instruction ne s'exécute qu'une fois, seulement si la colonne
+    # manque réellement.
+    colonnes_existantes = {ligne[1] for ligne in conn.execute("PRAGMA table_info(sante_source)").fetchall()}
+    if "dates_suspectes" not in colonnes_existantes:
+        conn.execute("ALTER TABLE sante_source ADD COLUMN dates_suspectes INTEGER NOT NULL DEFAULT 0")
     conn.commit()
     return conn
 

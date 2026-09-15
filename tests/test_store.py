@@ -3,6 +3,7 @@ appel réseau ni subprocess réel : client HTTP simulé, résolution de jeton
 monkeypatchée, fichier SQLite toujours sous `tmp_path`."""
 
 import base64
+import sqlite3
 from datetime import datetime, timezone
 
 import httpx
@@ -84,6 +85,34 @@ def test_ouvrir_fixe_le_mode_journal_delete(tmp_path):
     mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
     conn.close()
     assert mode.lower() == "delete"
+
+
+def test_ouvrir_migre_un_fichier_pre_story_4_2_sans_perdre_les_lignes(tmp_path):
+    """Story 4.2 (trouvé en revue, Blind Hunter) : un fichier créé par une
+    version antérieure du code (table `sante_source` sans `dates_suspectes`)
+    doit être migré à la réouverture, colonne ajoutée avec un défaut de 0,
+    sans perdre les lignes déjà présentes."""
+    chemin = tmp_path / "d.sqlite3"
+
+    ancienne_conn = sqlite3.connect(str(chemin))
+    ancienne_conn.execute(
+        "CREATE TABLE sante_source (source_id TEXT PRIMARY KEY, dernier_item_vu TEXT, "
+        "etat TEXT NOT NULL DEFAULT 'active')"
+    )
+    ancienne_conn.execute(
+        "INSERT INTO sante_source (source_id, dernier_item_vu, etat) VALUES "
+        "('deja-la', '2026-01-01T00:00:00+00:00', 'suspecte')"
+    )
+    ancienne_conn.commit()
+    ancienne_conn.close()
+
+    conn = store.ouvrir(chemin)
+    ligne = conn.execute(
+        "SELECT dernier_item_vu, etat, dates_suspectes FROM sante_source WHERE source_id = 'deja-la'"
+    ).fetchone()
+    conn.close()
+
+    assert ligne == ("2026-01-01T00:00:00+00:00", "suspecte", 0)  # ligne préservée, colonne migrée à 0
 
 
 def test_filtrer_deja_vus_liste_vide(tmp_path):

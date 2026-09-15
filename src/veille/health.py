@@ -60,6 +60,17 @@ ETAT_ACTIF = "active"
 ETAT_SUSPECTE = "suspecte"
 ETAT_SOMMEIL = "en_sommeil"
 
+# Nombre minimal d'items partageant la même minute pour parler de motif
+# répété plutôt que de coïncidence isolée (Story 4.2). Seuil absolu, pas
+# proportionnel au lot — choix documenté dans les Dev Notes de la story :
+# le cas observé (flux qui rejouent une même date figée) est binaire, pas
+# une question de pourcentage. **3, pas 2** (corrigé en revue — trouvé par
+# l'Acceptance Auditor) : l'AC de la story exempte explicitement « un seul
+# doublon parmi de nombreux items à horaires distincts » — un seuil de 2
+# aurait signalé exactement ce cas que l'AC exclut. 3 exige un vrai motif
+# répété, jamais une simple paire fortuite.
+SEUIL_DATES_SUSPECTES = 3
+
 
 @dataclass(frozen=True)
 class RapportSante:
@@ -78,6 +89,28 @@ class RapportSante:
             for source_id, (ancien, nouveau) in sorted(self.transitions.items())
         )
         return f"Contrôle de fraîcheur : {len(self.transitions)} changement(s) d'état — {detail}"
+
+
+def detecter_dates_suspectes(items: list[Item]) -> bool:
+    """Vrai si au moins `SEUIL_DATES_SUSPECTES` items de `items` partagent
+    exactement la même `date_publication` tronquée à la minute (Story 4.2,
+    FR-13) — signal d'un flux qui rejoue une même date figée sur plusieurs
+    articles distincts (« ment sur sa fraîcheur »), plutôt qu'une simple
+    coïncidence isolée entre deux items.
+
+    Fonction pure, aucune I/O. Ne lève jamais (AD-6) : une date malformée
+    ou incomparable dégrade en `False` (aucune anomalie présumée) plutôt
+    que de remonter jusqu'à l'appelant.
+    """
+    try:
+        comptes: dict[datetime, int] = {}
+        for item in items:
+            minute = item.date_publication.replace(second=0, microsecond=0)
+            comptes[minute] = comptes.get(minute, 0) + 1
+        return any(compte >= SEUIL_DATES_SUSPECTES for compte in comptes.values())
+    except Exception:  # noqa: BLE001 — isolation totale (AD-6)
+        logger.exception("Échec de la détection de dates suspectes — aucune anomalie présumée.")
+        return False
 
 
 def enregistrer_activite(
@@ -110,6 +143,21 @@ def enregistrer_activite(
     hebdomadaire suivant ne l'a pas réévaluée, même si elle vient de
     produire un nouvel item.
 
+    Enregistre aussi `dates_suspectes` (Story 4.2, FR-13) — recalculé à
+    chaque appel à partir du **seul lot de cette nuit** (`detecter_dates_
+    suspectes(items)`, sur `items` au complet, **avant** le filtre de
+    plausibilité ci-dessus : un lot de dates toutes futures et toutes
+    identiques ment tout autant sur sa fraîcheur qu'un lot de dates
+    passées identiques — l'exclure de la détection aurait été le signal
+    le plus flagrant qui échappe à sa propre détection, trouvé en revue).
+    Pas cumulatif à travers les nuits : un lot sain efface un signal isolé
+    d'une nuit précédente, cohérent avec le fait que ce n'est encore
+    qu'une observation brute, pas `etat` lui-même (seule `evaluer_fraicheur`
+    en tire un jugement). **Toujours persisté**, même quand aucun item du
+    lot n'est plausible pour `dernier_item_vu` (trouvé en revue — le
+    signal ne doit jamais dépendre du filtre de plausibilité qui, lui, ne
+    concerne que `dernier_item_vu`).
+
     Ne fait rien si `items` est vide (rien de nouveau à enregistrer) et ne
     lève jamais (AD-6) : une panne ici dégrade en laissant l'état de santé
     inchangé, jamais en faisant perdre la collecte.
@@ -120,10 +168,8 @@ def enregistrer_activite(
         if maintenant is None:
             maintenant = datetime.now(timezone.utc)
 
+        dates_suspectes = detecter_dates_suspectes(items)
         candidats = [item.date_publication for item in items if item.date_publication <= maintenant]
-        if not candidats:
-            return
-        plus_recent = max(candidats)
 
         ligne = conn.execute(
             "SELECT dernier_item_vu FROM sante_source WHERE source_id = ?", (source_id,)
@@ -135,12 +181,26 @@ def enregistrer_activite(
             except ValueError:
                 existant = None
 
-        nouvelle_valeur = plus_recent if existant is None or plus_recent > existant else existant
+        if candidats:
+            plus_recent = max(candidats)
+            nouvelle_valeur = plus_recent if existant is None or plus_recent > existant else existant
+        else:
+            # Aucun item plausible cette nuit (ex. lot entièrement à date
+            # future) : `dernier_item_vu` reste inchangé, mais
+            # `dates_suspectes`, lui, doit quand même être enregistré
+            # ci-dessous (trouvé en revue — convergence blind+edge).
+            nouvelle_valeur = existant
 
         conn.execute(
-            "INSERT INTO sante_source (source_id, dernier_item_vu) VALUES (?, ?) "
-            "ON CONFLICT(source_id) DO UPDATE SET dernier_item_vu = excluded.dernier_item_vu",
-            (source_id, nouvelle_valeur.isoformat()),
+            "INSERT INTO sante_source (source_id, dernier_item_vu, dates_suspectes) VALUES (?, ?, ?) "
+            "ON CONFLICT(source_id) DO UPDATE SET "
+            "dernier_item_vu = excluded.dernier_item_vu, "
+            "dates_suspectes = excluded.dates_suspectes",
+            (
+                source_id,
+                nouvelle_valeur.isoformat() if nouvelle_valeur is not None else None,
+                int(dates_suspectes),
+            ),
         )
         conn.commit()
     except Exception:  # noqa: BLE001 — isolation totale (AD-6)
@@ -167,6 +227,17 @@ def evaluer_fraicheur(sources, conn: sqlite3.Connection, aujourdhui: date) -> Ra
     présumée anomale — l'absence de donnée n'est pas une évidence de
     panne (même principe que le seuil de signal, Story 1.4).
 
+    **Dates suspectes (Story 4.2, FR-13)** — une source dont le dernier
+    lot enregistré portait des dates mensongères (`dates_suspectes`,
+    persisté par `enregistrer_activite`) est marquée `suspecte` **même si
+    son `dernier_item_vu` est par ailleurs récent** (elle « répond
+    correctement », mais ment sur sa fraîcheur). Précédence explicite :
+    `en_sommeil` (silence prolongé, >90 jours) l'emporte toujours sur ce
+    signal — un endormissement, plus sévère et fondé sur un critère plus
+    simple à vérifier (le silence), ne doit jamais être rétrogradé vers
+    `suspecte` par une observation plus ancienne portée par un lot déjà
+    périmé.
+
     Ne lève jamais (AD-6) : dégrade en renvoyant un rapport vide (aucune
     transition appliquée) plutôt que de faire perdre le contrôle en cours.
 
@@ -183,19 +254,19 @@ def evaluer_fraicheur(sources, conn: sqlite3.Connection, aujourdhui: date) -> Ra
     for source in sources:
         try:
             ligne = conn.execute(
-                "SELECT dernier_item_vu, etat FROM sante_source WHERE source_id = ?",
+                "SELECT dernier_item_vu, etat, dates_suspectes FROM sante_source WHERE source_id = ?",
                 (source.id,),
             ).fetchone()
             if ligne is None or ligne[0] is None:
                 continue
 
-            dernier_item_vu_str, etat_actuel = ligne
+            dernier_item_vu_str, etat_actuel, dates_suspectes = ligne
             dernier_item_vu = datetime.fromisoformat(dernier_item_vu_str)
 
             age_jours = (aujourdhui - dernier_item_vu.date()).days
             if age_jours > SEUIL_SOMMEIL_JOURS:
                 nouvel_etat = ETAT_SOMMEIL
-            elif age_jours > SEUIL_SUSPECTE_JOURS:
+            elif age_jours > SEUIL_SUSPECTE_JOURS or dates_suspectes:
                 nouvel_etat = ETAT_SUSPECTE
             else:
                 nouvel_etat = ETAT_ACTIF

@@ -26,6 +26,79 @@ def _source(id_):
     return SimpleNamespace(id=id_)
 
 
+def _item_avec_date(date_publication, source_id="src", guid="g"):
+    return Item(
+        source_id=source_id,
+        guid=guid,
+        titre="Titre",
+        date_publication=date_publication,
+        langue="fr",
+        registre="apprendre",
+        url="https://exemple.test/a",
+        contenu_brut="",
+    )
+
+
+# --- detecter_dates_suspectes (Story 4.2) -------------------------------
+
+
+def test_detecter_dates_suspectes_trois_items_meme_minute_exacte():
+    instant = datetime(2026, 1, 1, 10, 30, tzinfo=timezone.utc)
+    items = [
+        _item_avec_date(instant, guid="a"),
+        _item_avec_date(instant, guid="b"),
+        _item_avec_date(instant, guid="c"),
+    ]
+    assert health.detecter_dates_suspectes(items) is True
+
+
+def test_detecter_dates_suspectes_meme_minute_secondes_differentes():
+    """Troncature à la minute, pas à la seconde — un motif répété peut
+    différer de quelques secondes et rester suspect."""
+    items = [
+        _item_avec_date(datetime(2026, 1, 1, 10, 30, 0, tzinfo=timezone.utc), guid="a"),
+        _item_avec_date(datetime(2026, 1, 1, 10, 30, 20, tzinfo=timezone.utc), guid="b"),
+        _item_avec_date(datetime(2026, 1, 1, 10, 30, 45, tzinfo=timezone.utc), guid="c"),
+    ]
+    assert health.detecter_dates_suspectes(items) is True
+
+
+def test_detecter_dates_suspectes_aucun_doublon():
+    items = [
+        _item_avec_date(datetime(2026, 1, 1, 10, 30, tzinfo=timezone.utc), guid="a"),
+        _item_avec_date(datetime(2026, 1, 1, 11, 0, tzinfo=timezone.utc), guid="b"),
+        _item_avec_date(datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc), guid="c"),
+    ]
+    assert health.detecter_dates_suspectes(items) is False
+
+
+def test_detecter_dates_suspectes_liste_vide():
+    assert health.detecter_dates_suspectes([]) is False
+
+
+def test_detecter_dates_suspectes_un_seul_item():
+    items = [_item_avec_date(datetime(2026, 1, 1, 10, 30, tzinfo=timezone.utc))]
+    assert health.detecter_dates_suspectes(items) is False
+
+
+def test_detecter_dates_suspectes_un_seul_doublon_isole_parmi_de_nombreux_items():
+    """AC2 : « un seul doublon parmi de nombreux items à horaires
+    distincts » n'est pas considéré mensongère — corrigé en revue (trouvé
+    par l'Acceptance Auditor) : un seuil de 2 aurait signalé exactement ce
+    cas que l'AC exclut explicitement. Seuls 3 items identiques ou plus
+    constituent un motif répété."""
+    items = [
+        _item_avec_date(datetime(2026, 1, 1, 8, 0, tzinfo=timezone.utc), guid="a"),
+        _item_avec_date(datetime(2026, 1, 1, 9, 0, tzinfo=timezone.utc), guid="b"),
+        # Le seul doublon isolé du lot :
+        _item_avec_date(datetime(2026, 1, 1, 10, 30, tzinfo=timezone.utc), guid="c"),
+        _item_avec_date(datetime(2026, 1, 1, 10, 30, tzinfo=timezone.utc), guid="d"),
+        _item_avec_date(datetime(2026, 1, 1, 12, 0, tzinfo=timezone.utc), guid="e"),
+        _item_avec_date(datetime(2026, 1, 1, 13, 0, tzinfo=timezone.utc), guid="f"),
+    ]
+    assert health.detecter_dates_suspectes(items) is False
+
+
 # --- enregistrer_activite -------------------------------------------------
 
 
@@ -118,7 +191,12 @@ def test_enregistrer_activite_ignore_un_item_a_date_future(tmp_path):
 
     ligne = conn.execute("SELECT dernier_item_vu FROM sante_source WHERE source_id = 'src'").fetchone()
     conn.close()
-    assert ligne is None  # l'item futur a été ignoré, rien à enregistrer
+    # La ligne existe désormais (corrigé en revue de la Story 4.2 : le
+    # signal dates_suspectes doit être persisté même sans item plausible),
+    # mais dernier_item_vu reste NULL — l'item futur a bien été ignoré
+    # pour ce seul calcul.
+    assert ligne is not None
+    assert ligne[0] is None
 
 
 def test_enregistrer_activite_retient_le_plus_recent_plausible_parmi_un_lot_mixte(tmp_path):
@@ -152,6 +230,76 @@ def test_enregistrer_activite_retient_le_plus_recent_plausible_parmi_un_lot_mixt
     ).fetchone()
     conn.close()
     assert datetime.fromisoformat(dernier) == item_plausible.date_publication
+
+
+def test_enregistrer_activite_persiste_dates_suspectes(tmp_path):
+    conn = store.ouvrir(tmp_path / "d.sqlite3")
+    instant = datetime(2026, 1, 1, 10, 30, tzinfo=timezone.utc)
+    items = [
+        _item_avec_date(instant, guid="a"),
+        _item_avec_date(instant, guid="b"),
+        _item_avec_date(instant, guid="c"),
+    ]
+
+    health.enregistrer_activite("src", items, conn)
+
+    (dates_suspectes,) = conn.execute(
+        "SELECT dates_suspectes FROM sante_source WHERE source_id = 'src'"
+    ).fetchone()
+    conn.close()
+    assert dates_suspectes == 1
+
+
+def test_enregistrer_activite_persiste_dates_suspectes_meme_sans_item_plausible(tmp_path):
+    """Trouvé en revue (convergence blind+edge) : un lot entièrement à
+    date future ment tout autant sur sa fraîcheur — le signal ne doit pas
+    dépendre du filtre de plausibilité qui, lui, ne concerne que
+    `dernier_item_vu`."""
+    conn = store.ouvrir(tmp_path / "d.sqlite3")
+    maintenant = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    futur = maintenant + timedelta(days=30)
+    items = [
+        _item_avec_date(futur, guid="a"),
+        _item_avec_date(futur, guid="b"),
+        _item_avec_date(futur, guid="c"),
+    ]
+
+    health.enregistrer_activite("src", items, conn, maintenant=maintenant)
+
+    dernier, dates_suspectes = conn.execute(
+        "SELECT dernier_item_vu, dates_suspectes FROM sante_source WHERE source_id = 'src'"
+    ).fetchone()
+    conn.close()
+    assert dernier is None  # aucun item plausible
+    assert dates_suspectes == 1  # mais le signal est bien enregistré
+
+
+def test_enregistrer_activite_lot_sain_efface_un_signal_precedent(tmp_path):
+    """`dates_suspectes` reflète le lot de **cette nuit**, pas un
+    historique cumulé — un lot sain remet le signal à zéro."""
+    conn = store.ouvrir(tmp_path / "d.sqlite3")
+    instant = datetime(2026, 1, 1, 10, 30, tzinfo=timezone.utc)
+    health.enregistrer_activite(
+        "src",
+        [
+            _item_avec_date(instant, guid="a"),
+            _item_avec_date(instant, guid="b"),
+            _item_avec_date(instant, guid="c"),
+        ],
+        conn,
+    )
+
+    health.enregistrer_activite(
+        "src",
+        [_item_avec_date(datetime(2026, 1, 2, 9, 0, tzinfo=timezone.utc), guid="c")],
+        conn,
+    )
+
+    (dates_suspectes,) = conn.execute(
+        "SELECT dates_suspectes FROM sante_source WHERE source_id = 'src'"
+    ).fetchone()
+    conn.close()
+    assert dates_suspectes == 0
 
 
 # --- evaluer_fraicheur -----------------------------------------------------
@@ -207,6 +355,62 @@ def test_evaluer_fraicheur_suspecte_redevient_active_si_a_nouveau_fraiche(tmp_pa
     conn.close()
     assert etat == health.ETAT_ACTIF
     assert rapport.transitions == {"src": (health.ETAT_SUSPECTE, health.ETAT_ACTIF)}
+
+
+def test_evaluer_fraicheur_dates_suspectes_force_suspecte_meme_si_recente(tmp_path):
+    """Story 4.2, AC1 : une source qui répond correctement (item très
+    récent) mais dont le lot porte des dates mensongères doit quand même
+    passer `suspecte` — le signal l'emporte sur le calcul d'âge seul."""
+    conn = store.ouvrir(tmp_path / "d.sqlite3")
+    instant = datetime.now(timezone.utc)
+    items = [
+        _item_avec_date(instant, guid="a"),
+        _item_avec_date(instant, guid="b"),
+        _item_avec_date(instant, guid="c"),
+    ]
+    health.enregistrer_activite("src", items, conn)
+
+    rapport = health.evaluer_fraicheur([_source("src")], conn, date.today())
+
+    (etat,) = conn.execute("SELECT etat FROM sante_source WHERE source_id = 'src'").fetchone()
+    conn.close()
+    assert etat == health.ETAT_SUSPECTE
+    assert rapport.transitions == {"src": (health.ETAT_ACTIF, health.ETAT_SUSPECTE)}
+
+
+def test_evaluer_fraicheur_en_sommeil_l_emporte_sur_dates_suspectes(tmp_path):
+    """Story 4.2, AC3 : une source déjà `en_sommeil` (silence prolongé) ne
+    doit jamais être rétrogradée à `suspecte` par un signal de dates
+    mensongères porté par un lot déjà périmé (avant l'endormissement)."""
+    conn = store.ouvrir(tmp_path / "d.sqlite3")
+    instant_suspect = datetime.now(timezone.utc) - timedelta(days=100)
+    items = [
+        _item_avec_date(instant_suspect, guid="a"),
+        _item_avec_date(instant_suspect, guid="b"),
+        _item_avec_date(instant_suspect, guid="c"),
+    ]
+    health.enregistrer_activite("src", items, conn)
+
+    rapport = health.evaluer_fraicheur([_source("src")], conn, date.today())
+
+    (etat,) = conn.execute("SELECT etat FROM sante_source WHERE source_id = 'src'").fetchone()
+    conn.close()
+    assert etat == health.ETAT_SOMMEIL
+    assert rapport.transitions == {"src": (health.ETAT_ACTIF, health.ETAT_SOMMEIL)}
+
+
+def test_evaluer_fraicheur_sans_dates_suspectes_reste_active(tmp_path):
+    """Non-régression explicite de la Story 4.1 : sans signal de dates
+    suspectes, une source fraîche reste `active` comme avant."""
+    conn = store.ouvrir(tmp_path / "d.sqlite3")
+    health.enregistrer_activite("src", [_item(jours_avant=1)], conn)
+
+    rapport = health.evaluer_fraicheur([_source("src")], conn, date.today())
+
+    (etat,) = conn.execute("SELECT etat FROM sante_source WHERE source_id = 'src'").fetchone()
+    conn.close()
+    assert etat == health.ETAT_ACTIF
+    assert rapport.transitions == {}
 
 
 def test_evaluer_fraicheur_degrade_sans_lever_si_la_connexion_echoue(tmp_path):
