@@ -16,7 +16,7 @@ from pathlib import Path
 
 import httpx
 
-from veille import collect, store
+from veille import collect, health, store
 from veille.enrich.llm import enrichir, marquer_recommandation
 from veille.filter import CHAMPS_QUOTAS, charger_ponderations
 from veille.publish import publier, publier_archive, publier_bandeau_echec
@@ -110,23 +110,24 @@ def executer(
 
         store.synchroniser_depuis_distant(deja_vus_path, client=store_client)
         try:
-            deja_vus_conn = store.ouvrir(deja_vus_path)
+            store_conn = store.ouvrir(deja_vus_path)
         except Exception:  # noqa: BLE001 — isolation dédiée (trouvé en revue) :
             # une panne d'ouverture locale (fichier corrompu, disque plein…)
-            # ne doit dégrader que le filtrage « déjà vu » de ce run, jamais
-            # faire perdre la collecte/publication elles-mêmes.
+            # ne doit dégrader que le filtrage « déjà vu »/la santé des
+            # sources de ce run, jamais faire perdre la collecte/publication
+            # elles-mêmes.
             logger.exception(
-                "Impossible d'ouvrir l'état « déjà vu » local — collecte "
-                "sans filtrage déjà-vu pour cette nuit."
+                "Impossible d'ouvrir l'état local (déjà vu / santé des "
+                "sources) — collecte sans ces mécanismes pour cette nuit."
             )
-            deja_vus_conn = None
+            store_conn = None
         try:
             resultat_collecte = collect.collecter(
                 sources_path,
                 profil_path,
                 scoring_path,
                 quotas_path,
-                deja_vus_conn=deja_vus_conn,
+                store_conn=store_conn,
             )
             entrees = enrichir(resultat_collecte.items, client=llm_client)
 
@@ -141,7 +142,7 @@ def executer(
             markdown = rendre_markdown(entrees, maintenant)
             archive_ok = publier_archive(markdown, maintenant.date(), client=publish_client)
 
-            if page_ok and archive_ok and deja_vus_conn is not None:
+            if page_ok and archive_ok and store_conn is not None:
                 # Isolé de son propre `try` (trouvé en revue) : la publication
                 # a déjà réussi à ce stade — une panne de marquage/
                 # retéléversement ne doit jamais requalifier ce succès en
@@ -159,7 +160,7 @@ def executer(
                     items_publies = [
                         item for item in resultat_collecte.items if item.registre in CHAMPS_QUOTAS
                     ]
-                    store.marquer_vus(items_publies, deja_vus_conn)
+                    store.marquer_vus(items_publies, store_conn)
                     if not store.televerser_vers_distant(deja_vus_path, client=store_client):
                         # Trouvé en revue (convergence des 3 couches) : sans ce
                         # log, un échec de retéléversement était totalement
@@ -186,8 +187,8 @@ def executer(
 
             return page_ok and archive_ok
         finally:
-            if deja_vus_conn is not None:
-                deja_vus_conn.close()
+            if store_conn is not None:
+                store_conn.close()
     except Exception:  # noqa: BLE001 — filet de sécurité de dernier recours (trouvé en revue)
         logger.exception("Échec inattendu du pipeline — nuit perdue, mais le run ne plante pas.")
         return False
@@ -250,8 +251,80 @@ def main_bandeau_echec() -> None:
     sys.exit(0 if reussite else 1)
 
 
+def controler_fraicheur(
+    sources_path: str | Path | None = None,
+    deja_vus_path: str | Path | None = None,
+    store_client: httpx.Client | None = None,
+) -> bool:
+    """Contrôle de fraîcheur hebdomadaire (FR-12/13, Story 4.1) : synchronise
+    l'état depuis le dépôt source, réévalue chaque source configurée
+    (`health.evaluer_fraicheur`), journalise le résumé, retéléverse l'état.
+
+    Point d'entrée distinct d'`executer()` (voir `main_controle_sante`,
+    invoqué par un second workflow GitHub Actions, `controle-hebdomadaire.yml`,
+    indépendant de `pipeline-nocturne.yml`) : une panne de l'un ne doit
+    jamais affecter l'autre.
+
+    Ne lève jamais (même filet de sécurité qu'`executer()`). Retourne
+    `True` si le contrôle a pu s'exécuter et l'état a été retéléversé avec
+    succès, `False` sinon — un retour `False` **n'indique jamais** qu'une
+    source est en panne (ça, `RapportSante.resume()` le journalise déjà en
+    détail), seulement que le mécanisme lui-même (ouverture locale,
+    retéléversement) a échoué.
+    """
+    try:
+        store.synchroniser_depuis_distant(deja_vus_path, client=store_client)
+        try:
+            conn = store.ouvrir(deja_vus_path)
+        except Exception:  # noqa: BLE001 — isolation dédiée, même réflexe qu'executer()
+            logger.exception(
+                "Impossible d'ouvrir l'état local — contrôle de fraîcheur "
+                "annulé pour cette exécution."
+            )
+            return False
+
+        try:
+            sources_path_resolu = (
+                collect.DEFAULT_SOURCES_PATH if sources_path is None else sources_path
+            )
+            sources = collect.load_sources(sources_path_resolu)
+            aujourdhui = datetime.now(timezone.utc).date()
+            rapport = health.evaluer_fraicheur(sources, conn, aujourdhui)
+            logger.info(rapport.resume())
+
+            reussite = store.televerser_vers_distant(deja_vus_path, client=store_client)
+            if not reussite:
+                # Même discipline que le retéléversement « déjà vu » dans
+                # executer() (trouvé en revue de la Story 3.4) : jamais
+                # silencieux, même sans nouvelle tentative automatique.
+                logger.warning(
+                    "Retéléversement de l'état de santé en échec — les "
+                    "transitions calculées cette semaine ne seront pas "
+                    "visibles du prochain contrôle tant que l'état distant "
+                    "n'aura pas été resynchronisé avec succès."
+                )
+            return reussite
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 — filet de sécurité de dernier recours
+        logger.exception("Échec inattendu du contrôle de fraîcheur.")
+        return False
+
+
+def main_controle_sante() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
+    reussite = controler_fraicheur()
+    if not reussite:
+        logger.warning("Contrôle de fraîcheur hebdomadaire en échec.")
+    sys.exit(0 if reussite else 1)
+
+
 if __name__ == "__main__":
     if "--bandeau-echec" in sys.argv[1:]:
         main_bandeau_echec()
+    elif "--controle-sante" in sys.argv[1:]:
+        main_controle_sante()
     else:
         main()

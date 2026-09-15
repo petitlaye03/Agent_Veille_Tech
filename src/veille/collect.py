@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from veille import health
 from veille.config import SourceConfig, load_sources
 from veille.connectors import json_connector, rss_connector, scrape_connector
 from veille.dedup import RapportDedoublonnage, dedupliquer
@@ -76,10 +77,23 @@ class RapportSource:
     nb_dates_approximatives: int = 0
     echec: str = ""
 
+    # Vrai quand la source est `en_sommeil` (Story 4.1, FR-12) et n'a donc
+    # même pas été tentée cette nuit — état distinct d'un échec ou d'un
+    # silence normal : sans ce champ, une source en sommeil serait
+    # indiscernable d'une source `MUETTE` (collectée, mais qui n'a rien
+    # renvoyé), alors que la raison réelle (ignorée délibérément) n'a rien
+    # à voir et ne doit jamais être diagnostiquée à tort comme une panne.
+    ignoree_sommeil: bool = False
+
     @property
     def est_muette(self) -> bool:
-        """N'a rien collecté du tout, sans erreur — panne insidieuse."""
-        return not self.echec and self.nb_items == 0
+        """N'a rien collecté du tout, sans erreur — panne insidieuse.
+
+        Exclut explicitement une source ignorée parce qu'`en_sommeil`
+        (Story 4.1) : son absence d'items est déjà expliquée et journalisée
+        ailleurs (`ignoree_sommeil`), ce n'est pas un silence à diagnostiquer.
+        """
+        return not self.echec and not self.ignoree_sommeil and self.nb_items == 0
 
     @property
     def est_absorbee(self) -> bool:
@@ -137,14 +151,28 @@ class ResultatCollecte:
         return [r for r in self.sources_en_echec if r.type in CONNECTORS]
 
     @property
+    def sources_tentees(self) -> list[RapportSource]:
+        """Sources réellement soumises à un connecteur cette nuit — exclut
+        celles ignorées parce qu'`en_sommeil` (Story 4.1) : une source
+        jamais interrogée ne doit jamais diluer un taux calculé sur ce qui
+        a réellement été tenté (trouvé en revue — sans cette exclusion,
+        `taux_echec` se rapprochait mécaniquement de 0 à mesure que des
+        sources s'endorment, rendant `anomalie_pannes` de moins en moins
+        sensible avec le temps, précisément l'inverse de l'effet voulu)."""
+        return [r for r in self.rapports if not r.ignoree_sommeil]
+
+    @property
     def taux_echec(self) -> float:
-        """Proportion du socle en panne réseau/HTTP réelle cette nuit (0.0 si
-        aucune source configurée) — ni les sources muettes (zéro item sans
-        erreur), ni les sources absorbées, ni une source dont le `type` est
-        mal orthographié (Story 2.2, FR-2)."""
-        if not self.rapports:
+        """Proportion des sources **réellement tentées** cette nuit qui sont
+        en panne réseau/HTTP réelle (0.0 si aucune source tentée) — ni les
+        sources muettes (zéro item sans erreur), ni les sources absorbées,
+        ni une source dont le `type` est mal orthographié (Story 2.2,
+        FR-2), ni une source `en_sommeil` jamais interrogée (Story 4.1,
+        trouvé en revue : voir `sources_tentees`)."""
+        tentees = self.sources_tentees
+        if not tentees:
             return 0.0
-        return len(self.sources_en_panne_reseau) / len(self.rapports)
+        return len(self.sources_en_panne_reseau) / len(tentees)
 
     @property
     def anomalie_pannes(self) -> bool:
@@ -158,6 +186,12 @@ class ResultatCollecte:
     @property
     def sources_absorbees(self) -> list[RapportSource]:
         return [r for r in self.rapports if r.est_absorbee]
+
+    @property
+    def sources_ignorees_sommeil(self) -> list[RapportSource]:
+        """Sources `en_sommeil` (Story 4.1) ignorées cette nuit — jamais
+        tentées par un connecteur, jamais comptées comme une panne."""
+        return [r for r in self.rapports if r.ignoree_sommeil]
 
     def resume(self) -> str:
         """Récapitulatif lisible et autosuffisant, anomalies en évidence.
@@ -191,8 +225,15 @@ class ResultatCollecte:
                 entete += f", écartés : {', '.join(pertes)}"
         lignes = [entete]
 
+        if self.sources_ignorees_sommeil:
+            lignes.append(
+                f"  {len(self.sources_ignorees_sommeil)} source(s) en sommeil, non interrogée(s)."
+            )
+
         for rapport in sorted(self.rapports, key=lambda r: (-r.nb_retenus, -r.nb_items)):
-            if rapport.echec:
+            if rapport.ignoree_sommeil:
+                etat = "EN SOMMEIL — non interrogée"
+            elif rapport.echec:
                 etat = f"ÉCHEC — {rapport.echec}"
             elif rapport.est_muette:
                 etat = "MUETTE — aucun item, sans erreur"
@@ -238,7 +279,7 @@ def collecter(
     profil_path: str | Path | None = None,
     scoring_path: str | Path | None = None,
     quotas_path: str | Path | None = None,
-    deja_vus_conn: sqlite3.Connection | None = None,
+    store_conn: sqlite3.Connection | None = None,
 ) -> ResultatCollecte:
     """Collecte le socle et rend compte de ce que chaque source a produit.
 
@@ -252,12 +293,18 @@ def collecter(
     « déjà vu » passe en premier, avant toute autre étape de filtrage
     (conformément à l'AC de la Story 3.4) : un item déjà publié une nuit
     précédente ne doit même pas être considéré par le seuil de signal, le
-    dédoublonnage ou le scoring. `deja_vus_conn` est optionnel
-    (`None` par défaut) : sans connexion fournie, aucun filtrage « déjà
-    vu » n'a lieu — ni régression pour les appelants existants (tests,
-    `run()`), ni couplage de `collect.py` à `sqlite3` au-delà de la
-    signature de ce seul paramètre (`store.py` reste seul responsable du
-    format de la connexion).
+    dédoublonnage ou le scoring.
+
+    `store_conn` (renommé depuis `deja_vus_conn` en Story 4.1 — sert
+    désormais deux fins sur la même connexion SQLite, un nom qui ne
+    décrirait plus que la moitié de son usage réel serait trompeur) est
+    optionnel (`None` par défaut) : sans connexion fournie, ni le filtrage
+    « déjà vu » (Story 3.4) ni la santé des sources (Story 4.1, une source
+    `en_sommeil` reste alors interrogée comme les autres) n'ont lieu — ni
+    régression pour les appelants existants (tests, `run()`), ni couplage
+    de `collect.py` à `sqlite3` au-delà de la signature de ce seul
+    paramètre (`store.py` reste seul responsable du format de la
+    connexion, `health.py` de la logique de santé qui s'y attache).
 
     Le profil, les pondérations et les quotas se chargent après la boucle
     protégée par source : `charger_profil`, `charger_ponderations` et
@@ -290,20 +337,31 @@ def collecter(
 
     debut = datetime.now(timezone.utc)
     items: list[Item] = []
-    collecte_par_source: list[tuple[SourceConfig, list[Item], str]] = []
+    collecte_par_source: list[tuple[SourceConfig, list[Item], str, bool]] = []
+
+    # Sources en sommeil (Story 4.1, FR-12) : lues une seule fois avant la
+    # boucle, jamais interrogées cette nuit — même sans connexion fournie
+    # (`store_conn is None`), l'ensemble reste vide et rien ne change pour
+    # les appelants existants.
+    sommeil = health.sources_en_sommeil(store_conn) if store_conn is not None else set()
 
     for source_config in sources:
+        if source_config.id in sommeil:
+            collecte_par_source.append((source_config, [], "", True))
+            continue
         items_source, echec = _fetch_one(source_config)
         items.extend(items_source)
-        collecte_par_source.append((source_config, items_source, echec))
+        if store_conn is not None:
+            health.enregistrer_activite(source_config.id, items_source, store_conn, maintenant=debut)
+        collecte_par_source.append((source_config, items_source, echec, False))
 
     # Le filtrage « déjà vu » (Story 3.4) passe **avant** toute autre étape
     # de filtrage : un item déjà publié une nuit précédente ne doit même
     # pas être considéré par le seuil de signal, le dédoublonnage ou le
-    # scoring. `deja_vus_conn` est optionnel : sans connexion fournie
-    # (appelants existants, tests), aucun filtrage n'a lieu.
-    if deja_vus_conn is not None:
-        items, rapport_deja_vu = filtrer_deja_vus(items, deja_vus_conn)
+    # scoring. Sans connexion fournie (appelants existants, tests), aucun
+    # filtrage n'a lieu.
+    if store_conn is not None:
+        items, rapport_deja_vu = filtrer_deja_vus(items, store_conn)
     else:
         rapport_deja_vu = RapportDejaVu()
 
@@ -343,8 +401,9 @@ def collecter(
             nb_retenus=retenus_par_source.get(source_config.id, 0),
             nb_dates_approximatives=_compter_dates_approximatives(items_source, debut),
             echec=echec,
+            ignoree_sommeil=ignoree_sommeil,
         )
-        for source_config, items_source, echec in collecte_par_source
+        for source_config, items_source, echec, ignoree_sommeil in collecte_par_source
     ]
 
     resultat = ResultatCollecte(

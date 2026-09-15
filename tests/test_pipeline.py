@@ -834,3 +834,107 @@ def test_executer_ne_marque_pas_vu_un_item_de_registre_inconnu(tmp_path):
     finally:
         conn.close()
     assert lignes == []  # rien marqué : jamais réellement publié
+
+
+# --- Contrôle de fraîcheur hebdomadaire (FR-12/13, Story 4.1) -----------
+
+
+def test_controler_fraicheur_evalue_et_reteleverse(tmp_path):
+    from veille import store
+
+    sources_yaml = _sources_yaml(tmp_path)
+    deja_vus_path = tmp_path / "deja-vu.sqlite3"
+
+    conn = store.ouvrir(deja_vus_path)
+    conn.execute(
+        "INSERT INTO sante_source (source_id, dernier_item_vu, etat) "
+        "VALUES ('test-source', '2000-01-01T00:00:00+00:00', 'active')"
+    )
+    conn.commit()
+    conn.close()
+
+    client_store = _ClientStoreSimule()
+    reussite = pipeline.controler_fraicheur(
+        sources_path=sources_yaml, deja_vus_path=deja_vus_path, store_client=client_store
+    )
+
+    assert reussite is True
+    assert len(client_store.put_calls) == 1
+
+    conn = store.ouvrir(deja_vus_path)
+    (etat,) = conn.execute(
+        "SELECT etat FROM sante_source WHERE source_id = 'test-source'"
+    ).fetchone()
+    conn.close()
+    assert etat == "en_sommeil"  # très ancienne date : > 90 jours
+
+
+def test_controler_fraicheur_journalise_le_resume(tmp_path, caplog):
+    import logging
+
+    from veille import store
+
+    sources_yaml = _sources_yaml(tmp_path)
+    deja_vus_path = tmp_path / "deja-vu.sqlite3"
+    conn = store.ouvrir(deja_vus_path)
+    conn.execute(
+        "INSERT INTO sante_source (source_id, dernier_item_vu, etat) "
+        "VALUES ('test-source', '2000-01-01T00:00:00+00:00', 'active')"
+    )
+    conn.commit()
+    conn.close()
+
+    with caplog.at_level(logging.INFO, logger="veille.pipeline"):
+        pipeline.controler_fraicheur(
+            sources_path=sources_yaml, deja_vus_path=deja_vus_path, store_client=_ClientStoreSimule()
+        )
+
+    assert "Contrôle de fraîcheur" in caplog.text
+
+
+def test_controler_fraicheur_retourne_false_si_le_televersement_echoue(tmp_path):
+    sources_yaml = _sources_yaml(tmp_path)
+    deja_vus_path = tmp_path / "deja-vu.sqlite3"
+
+    reussite = pipeline.controler_fraicheur(
+        sources_path=sources_yaml,
+        deja_vus_path=deja_vus_path,
+        store_client=_ClientStoreQuiEchoueAuTeleversement(),
+    )
+
+    assert reussite is False
+
+
+def test_controler_fraicheur_ne_leve_jamais_si_ouverture_echoue(tmp_path, monkeypatch):
+    from veille import store
+
+    def _ouvrir_qui_leve(*args, **kwargs):
+        raise RuntimeError("fichier corrompu simulé")
+
+    monkeypatch.setattr(store, "ouvrir", _ouvrir_qui_leve)
+
+    reussite = pipeline.controler_fraicheur(
+        sources_path=_sources_yaml(tmp_path),
+        deja_vus_path=tmp_path / "deja-vu.sqlite3",
+        store_client=_ClientStoreSimule(),
+    )
+
+    assert reussite is False
+
+
+def test_main_controle_sante_sort_avec_le_code_zero_si_reussi(monkeypatch):
+    monkeypatch.setattr(pipeline, "controler_fraicheur", lambda **kwargs: True)
+
+    with pytest.raises(SystemExit) as exc_info:
+        pipeline.main_controle_sante()
+
+    assert exc_info.value.code == 0
+
+
+def test_main_controle_sante_sort_avec_un_code_non_nul_si_echoue(monkeypatch):
+    monkeypatch.setattr(pipeline, "controler_fraicheur", lambda **kwargs: False)
+
+    with pytest.raises(SystemExit) as exc_info:
+        pipeline.main_controle_sante()
+
+    assert exc_info.value.code == 1

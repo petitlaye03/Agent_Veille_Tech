@@ -119,6 +119,20 @@ def ouvrir(chemin: str | Path | None = None) -> sqlite3.Connection:
     # garantit que chaque commit atterrit dans le fichier principal.
     conn.execute("PRAGMA journal_mode=DELETE")
     conn.execute("CREATE TABLE IF NOT EXISTS deja_vu (cle TEXT PRIMARY KEY)")
+    # Santé des sources (AD-5, FR-12/13, Story 4.1) : même fichier, même
+    # fonction d'ouverture — AD-5 désigne explicitement ce fichier SQLite
+    # comme la seule source de vérité pour « le déjà vu par source **et**
+    # l'État d'une Source », pas deux fichiers séparés. `health.py` reste
+    # seul responsable de la logique de transition d'état ; ce module reste
+    # seul responsable du schéma (un seul propriétaire par table, même
+    # principe que pour `deja_vu`).
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS sante_source ("
+        "source_id TEXT PRIMARY KEY, "
+        "dernier_item_vu TEXT, "
+        "etat TEXT NOT NULL DEFAULT 'active'"
+        ")"
+    )
     conn.commit()
     return conn
 

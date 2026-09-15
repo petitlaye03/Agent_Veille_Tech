@@ -204,7 +204,7 @@ def test_une_source_defaillante_n_empeche_pas_les_autres_types(tmp_path):
 
 
 def test_collecter_sans_connexion_deja_vus_ne_filtre_rien(tmp_path):
-    """`deja_vus_conn` est optionnel (`None` par défaut) : sans connexion
+    """`store_conn` est optionnel (`None` par défaut) : sans connexion
     fournie, aucun filtrage « déjà vu » n'a lieu — pas de régression pour
     les appelants existants."""
     sources_yaml = _write_sources_yaml(tmp_path)
@@ -221,13 +221,13 @@ def test_collecter_ecarte_un_item_deja_marque_vu(tmp_path):
 
     # Premier passage : rien de connu, les deux items sont retenus, puis
     # marqués vus (comme le ferait `pipeline.executer()` après publication).
-    premier = collecter(sources_yaml, deja_vus_conn=conn)
+    premier = collecter(sources_yaml, store_conn=conn)
     assert len(premier.items) == 2
     store.marquer_vus(premier.items, conn)
 
     # Second passage, mêmes sources : les deux items sont déjà vus, donc
     # écartés **avant** même le seuil de signal/dédoublonnage/scoring.
-    second = collecter(sources_yaml, deja_vus_conn=conn)
+    second = collecter(sources_yaml, store_conn=conn)
     conn.close()
 
     assert second.items == []
@@ -258,9 +258,85 @@ def test_collecter_ne_filtre_que_les_items_deja_vus_pas_les_nouveaux(tmp_path):
     )
     conn.commit()
 
-    resultat = collecter(sources_yaml, deja_vus_conn=conn)
+    resultat = collecter(sources_yaml, store_conn=conn)
     conn.close()
 
     assert len(resultat.items) == 1
     assert resultat.items[0].url == "https://example.invalid/articles/deuxieme"
     assert resultat.deja_vu.total_ecartes == 1
+
+
+# --- Santé des sources (Story 4.1) --------------------------------------
+
+
+def test_collecter_sans_connexion_interroge_toujours_toutes_les_sources(tmp_path):
+    """Sans `store_conn`, aucune notion de sommeil n'existe — pas de
+    régression pour les appelants existants."""
+    sources_yaml = _write_sources_yaml(tmp_path)
+
+    resultat = collecter(sources_yaml)
+
+    assert len(resultat.items) == 2
+    assert resultat.sources_ignorees_sommeil == []
+
+
+def test_collecter_n_interroge_pas_une_source_en_sommeil(tmp_path, monkeypatch):
+    sources_yaml = _write_sources_yaml(tmp_path)
+    conn = store.ouvrir(tmp_path / "deja-vu.sqlite3")
+    conn.execute(
+        "INSERT INTO sante_source (source_id, etat) VALUES (?, 'en_sommeil')",
+        ("test-source",),
+    )
+    conn.commit()
+
+    appels = []
+    import veille.collect as collect_module
+
+    def _fetch_espion(*args, **kwargs):
+        appels.append(args)
+        raise AssertionError("le connecteur n'aurait jamais dû être appelé")
+
+    monkeypatch.setitem(collect_module.CONNECTORS, "rss", _fetch_espion)
+
+    resultat = collecter(sources_yaml, store_conn=conn)
+    conn.close()
+
+    assert appels == []  # le connecteur n'a jamais été appelé
+    assert resultat.items == []
+    assert len(resultat.sources_ignorees_sommeil) == 1
+    assert resultat.sources_ignorees_sommeil[0].source_id == "test-source"
+    assert "en sommeil" in resultat.resume()
+
+
+def test_collecter_interroge_toujours_une_source_suspecte(tmp_path):
+    """Trouvé en revue (test-coverage gap, Blind Hunter) : la Dev Notes de
+    la story appelle explicitement `suspecte` un état qui reste collecté
+    normalement, contrairement à `en_sommeil` — sans ce test, rien ne
+    protégeait cet invariant contre une future confusion des deux états."""
+    sources_yaml = _write_sources_yaml(tmp_path)
+    conn = store.ouvrir(tmp_path / "deja-vu.sqlite3")
+    conn.execute(
+        "INSERT INTO sante_source (source_id, etat) VALUES (?, 'suspecte')",
+        ("test-source",),
+    )
+    conn.commit()
+
+    resultat = collecter(sources_yaml, store_conn=conn)
+    conn.close()
+
+    assert len(resultat.items) == 2  # la source a bien été interrogée
+    assert resultat.sources_ignorees_sommeil == []
+
+
+def test_collecter_met_a_jour_la_sante_apres_une_collecte_active(tmp_path):
+    sources_yaml = _write_sources_yaml(tmp_path)
+    conn = store.ouvrir(tmp_path / "deja-vu.sqlite3")
+
+    collecter(sources_yaml, store_conn=conn)
+
+    ligne = conn.execute(
+        "SELECT dernier_item_vu FROM sante_source WHERE source_id = 'test-source'"
+    ).fetchone()
+    conn.close()
+    assert ligne is not None
+    assert ligne[0] is not None

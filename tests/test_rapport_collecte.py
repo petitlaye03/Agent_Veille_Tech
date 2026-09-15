@@ -211,6 +211,61 @@ def test_pas_d_anomalie_quand_la_moitie_ou_moins_des_sources_echouent(tmp_path):
     assert resultat.taux_echec == pytest.approx(0.5)
 
 
+def test_une_source_en_sommeil_ne_dilue_pas_le_taux_d_echec(tmp_path):
+    """Story 4.1, trouvé en revue (convergence Blind Hunter + Edge Case
+    Hunter) : une source `en_sommeil` n'a même pas été tentée — elle ne
+    doit jamais faire baisser artificiellement `taux_echec` en gonflant
+    le dénominateur, sans quoi l'alarme `anomalie_pannes` devient de moins
+    en moins sensible à mesure que des sources s'endorment (l'issue même
+    que cette story produit avec le temps)."""
+    from veille import store
+
+    socle = _ecrire_socle(
+        tmp_path,
+        f"""
+        sources:
+          - id: dodo-1
+            type: json
+            url: file:///chemin/inexistant-dodo-1.json
+            langue: fr
+            registre: apprendre
+          - id: dodo-2
+            type: json
+            url: file:///chemin/inexistant-dodo-2.json
+            langue: fr
+            registre: apprendre
+          - id: dodo-3
+            type: json
+            url: file:///chemin/inexistant-dodo-3.json
+            langue: fr
+            registre: apprendre
+          - id: cassee
+            type: json
+            url: file:///chemin/inexistant-cassee.json
+            langue: fr
+            registre: apprendre
+        """,
+    )
+    conn = store.ouvrir(tmp_path / "deja-vu.sqlite3")
+    for source_id in ("dodo-1", "dodo-2", "dodo-3"):
+        conn.execute(
+            "INSERT INTO sante_source (source_id, etat) VALUES (?, 'en_sommeil')", (source_id,)
+        )
+    conn.commit()
+
+    resultat = collecter(socle, store_conn=conn)
+    conn.close()
+
+    # 4 sources au total, 3 en sommeil (jamais tentées) : seule "cassee"
+    # a réellement été tentée, et elle échoue — 1/1 = 100 %, pas 1/4 = 25 %.
+    assert len(resultat.sources_ignorees_sommeil) == 3
+    assert resultat.sources_tentees == [
+        r for r in resultat.rapports if r.source_id == "cassee"
+    ]
+    assert resultat.taux_echec == pytest.approx(1.0)
+    assert resultat.anomalie_pannes is True
+
+
 def test_un_type_de_source_mal_orthographie_ne_compte_pas_comme_panne_reseau(tmp_path):
     """Trouvé en revue (Story 2.2) : une faute de frappe dans `type:` est une
     erreur de configuration statique, jamais tentée par un connecteur — pas

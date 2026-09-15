@@ -1,0 +1,69 @@
+# Contrôle de fraîcheur hebdomadaire des sources (Story 4.1, FR-12/13).
+#
+# Distinct de `pipeline-nocturne.yml` (Story 3.1) — cadence différente
+# (hebdomadaire vs nocturne) et panne isolée de l'un à l'autre (AC6 de la
+# story) : ce job ne collecte ni ne publie rien, il ne fait que lire
+# `sources.yaml` et l'état de santé déjà accumulé (`sante_source`,
+# alimenté chaque nuit par `pipeline-nocturne.yml`) pour transitionner
+# l'état de chaque source (`active`/`suspecte`/`en_sommeil`).
+#
+# Prérequis réels avant que ce workflow puisse réussir (aucun nouveau par
+# rapport à `pipeline-nocturne.yml`, mêmes secrets déjà en place depuis la
+# Story 3.4) :
+#   - aucun secret supplémentaire : SOURCE_GITHUB_TOKEN est mappé sur le
+#     jeton ambiant du job (secrets.GITHUB_TOKEN, scopé à ce dépôt-ci grâce
+#     à `permissions: contents: write` ci-dessous) — même mécanisme que le
+#     pipeline nocturne pour l'état « déjà vu »
+#   - ni ANTHROPIC_API_KEY ni DIGEST_PUBLISH_TOKEN : ce job ne rend, n'enrichit
+#     ni ne publie rien, il ne touche que l'état de santé sur ce dépôt-ci
+#
+# Même risque connu que `pipeline-nocturne.yml`, non contourné ici non plus :
+# GitHub désactive silencieusement un déclencheur `schedule` après 60 jours
+# sans activité de commit sur le dépôt (voir deferred-work.md).
+
+name: Contrôle de fraîcheur hebdomadaire
+
+on:
+  schedule:
+    # Dimanche 6h00 UTC — jour/heure sans contrainte connue autre que
+    # « hebdomadaire » (aucune heure précise n'est exigée par l'AC),
+    # choisi loin des pics de charge documentés par GitHub (sommet de
+    # l'heure, minuit) par la même prudence que le cron nocturne
+    # (Story 3.1). Amendable sans conséquence si un autre jour convient
+    # mieux à l'usage réel.
+    - cron: "0 6 * * 0"
+  workflow_dispatch: {}
+
+# Même raison que pipeline-nocturne.yml : un déclenchement manuel ne doit
+# jamais chevaucher un run programmé sur le même fichier SQLite.
+concurrency:
+  group: controle-hebdomadaire
+  cancel-in-progress: false
+
+# Écrit sur le dépôt courant (état de santé, même fichier SQLite que
+# l'état « déjà vu » — AD-5) via le jeton ambiant du job.
+permissions:
+  contents: write
+
+jobs:
+  controler-la-fraicheur:
+    runs-on: ubuntu-latest
+    # Ce job ne fait ni collecte réseau par source ni appel LLM — un
+    # plafond nettement plus bas que celui du pipeline nocturne suffit.
+    timeout-minutes: 10
+    steps:
+      # Même raison qu'en Story 3.1 (trouvé en revue) : ce job manipule un
+      # jeton à droits d'écriture sur ce dépôt — épinglé par SHA de commit,
+      # pas par tag flottant.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Installer uv
+        uses: astral-sh/setup-uv@e4db8464a088ece1b920f60402e813ea4de65b8f # v4
+
+      - name: Installer les dépendances
+        run: uv sync --locked
+
+      - name: Exécuter le contrôle de fraîcheur
+        env:
+          SOURCE_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: uv run python -m veille.pipeline --controle-sante
