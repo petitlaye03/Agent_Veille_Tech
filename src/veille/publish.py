@@ -23,7 +23,13 @@ from datetime import date
 import httpx
 from dotenv import load_dotenv
 
-from veille.render import BANDEAU_ECHEC_DEBUT, BANDEAU_ECHEC_FIN
+from veille.render import (
+    BANDEAU_ECHEC_DEBUT,
+    BANDEAU_ECHEC_FIN,
+    RECAPITULATIF_SANTE_DEBUT,
+    RECAPITULATIF_SANTE_FIN,
+    rendre_recapitulatif_sante,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -252,7 +258,7 @@ def publier_bandeau_echec(bandeau: str, client: httpx.Client | None = None) -> b
         corps = {
             "message": "Bandeau d'échec nocturne",
             "content": base64.b64encode(
-                _inserer_bandeau(html_existant, bandeau).encode("utf-8")
+                _inserer_fragment(html_existant, _MOTIF_BANDEAU_ECHEC, bandeau).encode("utf-8")
             ).decode("ascii"),
         }
         if charge.get("sha"):  # même garde que `_publier` — jamais `"sha": null`
@@ -275,34 +281,128 @@ def publier_bandeau_echec(bandeau: str, client: httpx.Client | None = None) -> b
 _MOTIF_BANDEAU_ECHEC = re.compile(
     re.escape(BANDEAU_ECHEC_DEBUT) + r".*?" + re.escape(BANDEAU_ECHEC_FIN), re.DOTALL
 )
+_MOTIF_RECAPITULATIF_SANTE = re.compile(
+    re.escape(RECAPITULATIF_SANTE_DEBUT) + r".*?" + re.escape(RECAPITULATIF_SANTE_FIN), re.DOTALL
+)
 _MOTIF_BALISE_BODY = re.compile(r"<body[^>]*>", re.IGNORECASE)
 
 
-def _inserer_bandeau(html: str, bandeau: str) -> str:
-    """Remplace le bandeau déjà présent entre les marqueurs stables s'il y
-    en a un (idempotence, AC4 — plusieurs nuits d'échec consécutives ne
-    doivent jamais en empiler plusieurs), sinon l'insère juste après la
-    balise `<body>` (avec ou sans attributs — `<body>`/`<body class="...">`,
-    correctif de revue : un `str.replace("<body>", ...)` littéral aurait
-    raté toute balise portant un attribut). Si `<body...>` lui-même est
-    introuvable (page corrompue de façon inattendue), l'ajoute en tête
-    plutôt que de ne rien faire silencieusement.
+def _inserer_fragment(html: str, motif: re.Pattern, fragment: str) -> str:
+    """Remplace le contenu déjà présent entre les marqueurs stables
+    correspondant à `motif` s'il y en a un (idempotence — un fragment ne
+    doit jamais s'empiler d'un run au suivant), sinon l'insère juste après
+    la balise `<body>` (avec ou sans attributs — `<body>`/`<body
+    class="...">`, correctif de revue de la Story 3.2 : un
+    `str.replace("<body>", ...)` littéral aurait raté toute balise portant
+    un attribut). Si `<body...>` lui-même est introuvable (page corrompue
+    de façon inattendue), l'ajoute en tête plutôt que de ne rien faire
+    silencieusement.
 
-    `bandeau` est passé à `re.sub` via une fonction de remplacement plutôt
-    qu'une chaîne brute (correctif de revue) : une chaîne de remplacement
-    littérale ferait interpréter par `re` un `\\1`/`\\g<0>` qu'elle
-    contiendrait, une source d'erreur ou de corruption silencieuse sans
-    rapport avec le contenu réel du bandeau.
+    Généralisée depuis `_inserer_bandeau` (Story 3.2) à l'occasion de la
+    Story 4.3, qui en introduit un second usage (récapitulatif des sources
+    à surveiller) — factoriser à la deuxième occurrence d'un motif non
+    trivial plutôt que de le dupliquer une seconde fois à l'identique.
+
+    `fragment` est passé à `re.sub` via une fonction de remplacement
+    plutôt qu'une chaîne brute (correctif de revue de la Story 3.2) : une
+    chaîne de remplacement littérale ferait interpréter par `re` un
+    `\\1`/`\\g<0>` qu'elle contiendrait, une source d'erreur ou de
+    corruption silencieuse sans rapport avec le contenu réel du fragment.
     """
-    if _MOTIF_BANDEAU_ECHEC.search(html):
+    if motif.search(html):
         # Pas de `count=1` : si plusieurs paires de marqueurs existaient
         # (ne devrait jamais arriver par ce code, mais auto-cicatrisant si
         # une corruption externe en laissait plusieurs), toutes convergent
         # vers le même contenu plutôt que d'en laisser une orpheline.
-        return _MOTIF_BANDEAU_ECHEC.sub(lambda _m: bandeau, html)
+        return motif.sub(lambda _m: fragment, html)
     if _MOTIF_BALISE_BODY.search(html):
-        return _MOTIF_BALISE_BODY.sub(lambda m: f"{m.group(0)}\n{bandeau}", html, count=1)
-    return f"{bandeau}\n{html}"
+        return _MOTIF_BALISE_BODY.sub(lambda m: f"{m.group(0)}\n{fragment}", html, count=1)
+    return f"{fragment}\n{html}"
+
+
+def publier_recapitulatif_sante(
+    sources: list, client: httpx.Client | None = None
+) -> bool | None:
+    """Insère, remplace ou retire le panneau des sources à surveiller sur
+    la page déjà publiée (Story 4.3, AC1/AC3/AC4).
+
+    `sources` : `list[health.SourceASurveiller]` — non typé explicitement
+    ici pour la même raison que `render.rendre_recapitulatif_sante` (dont
+    la signature reprend le même choix) : ne pas faire dépendre `publish.py`
+    de `health.py`, aucun import inter-module de ce sens ailleurs dans le
+    projet.
+
+    Même patron que `publier_bandeau_echec` (Story 3.2) : lit le HTML déjà
+    publié, patche entre marqueurs stables (`_inserer_fragment`), republie
+    via le même mécanisme d'upsert par `sha`. Isolation totale : ne lève
+    jamais.
+
+    `sources` (`list[health.SourceASurveiller]`) **vide** signifie : plus
+    aucune source à surveiller cette semaine — le panneau existant, s'il y
+    en a un, est **retiré** (AC4 : un panneau périmé listant des problèmes
+    déjà résolus serait trompeur) ; s'il n'y en avait pas déjà un, rien à
+    faire (dégrade en `None`, pas un `True` qui prétendrait avoir changé
+    quelque chose).
+
+    Retour à trois états (même discipline que `publier_bandeau_echec`,
+    décision #46 du journal) :
+    - `None` — rien à changer (aucune page déjà publiée à patcher, ou
+      `sources` vide et aucun panneau existant à retirer) ;
+    - `False` — panne réelle (réseau, HTTP, contenu illisible) ;
+    - `True` — panneau publié, remplacé, ou retiré avec succès.
+    """
+    fourni = client is not None
+    resolu = client if fourni else _client()
+    if resolu is None:
+        return False
+
+    try:
+        charge = _charge_existante(resolu, CHEMIN_PAGE)
+        if charge is None:
+            logger.info(
+                "Aucune page déjà publiée à annoter d'un récapitulatif de "
+                "santé — rien à faire (probablement la toute première nuit)."
+            )
+            return None
+        if not charge.get("content"):
+            raise ValueError("réponse GET sans champ 'content' exploitable")
+        html_existant = base64.b64decode(charge["content"]).decode("utf-8")
+
+        if sources:
+            fragment = rendre_recapitulatif_sante(sources)
+            html_nouveau = _inserer_fragment(html_existant, _MOTIF_RECAPITULATIF_SANTE, fragment)
+            message = "Mise à jour du récapitulatif des sources à surveiller"
+        else:
+            if not _MOTIF_RECAPITULATIF_SANTE.search(html_existant):
+                logger.info(
+                    "Aucune source à surveiller et aucun récapitulatif déjà "
+                    "publié — rien à faire."
+                )
+                return None
+            # Retrait pur et simple (AC4) : les marqueurs et tout leur
+            # contenu disparaissent, pas de fragment vide laissé en place.
+            html_nouveau = _MOTIF_RECAPITULATIF_SANTE.sub("", html_existant)
+            message = "Retrait du récapitulatif des sources à surveiller (tout est rétabli)"
+
+        corps = {
+            "message": message,
+            "content": base64.b64encode(html_nouveau.encode("utf-8")).decode("ascii"),
+        }
+        if charge.get("sha"):  # même garde que `_publier` — jamais `"sha": null`
+            corps["sha"] = charge["sha"]
+
+        reponse_put = resolu.put(f"/repos/{PUBLISH_REPO}/contents/{CHEMIN_PAGE}", json=corps)
+        reponse_put.raise_for_status()
+        return True
+    except httpx.HTTPError:
+        _avertir_echec_publication("du récapitulatif de santé", categorie="recapitulatif")
+        return False
+    except Exception:  # noqa: BLE001 — isolation totale, même hors httpx.HTTPError
+        _avertir_echec_publication("du récapitulatif de santé", categorie="recapitulatif")
+        return False
+    finally:
+        if not fourni:
+            resolu.close()
 
 
 def _avertir_echec_publication(quoi: str, categorie: str) -> None:

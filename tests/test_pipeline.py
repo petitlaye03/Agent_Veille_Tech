@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from veille import pipeline, store
+from veille import pipeline, publish, store
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
@@ -22,9 +22,18 @@ def _isoler_le_stockage_deja_vu(tmp_path, monkeypatch):
     fichier par défaut et tenterait de résoudre un jeton réel (`gh auth
     token`). Les tests qui exercent spécifiquement le câblage du stockage
     (synchronisation, marquage, retéléversement) remplacent explicitement
-    ce qu'il faut par-dessus cette isolation par défaut."""
+    ce qu'il faut par-dessus cette isolation par défaut.
+
+    `publish._jeton` neutralisé aussi (trouvé en implémentation de la
+    Story 4.3) : `controler_fraicheur()` appelle désormais `publish.
+    publier_recapitulatif_sante(..., client=publish_client)`, et
+    `publish_client=None` par défaut — sans cette neutralisation, chaque
+    test de `controler_fraicheur()` sans client explicite aurait résolu un
+    vrai jeton (`gh auth token`) et fait un vrai appel réseau en lecture
+    vers l'API GitHub du dépôt de sortie."""
     monkeypatch.setattr(store, "CHEMIN_LOCAL_DEFAUT", tmp_path / "deja-vu.sqlite3")
     monkeypatch.setattr(store, "_jeton", lambda: None)
+    monkeypatch.setattr(publish, "_jeton", lambda: None)
 
 
 def _sources_yaml(tmp_path):
@@ -922,6 +931,99 @@ def test_controler_fraicheur_ne_leve_jamais_si_ouverture_echoue(tmp_path, monkey
     assert reussite is False
 
 
+class _ClientDigestPublie:
+    """Simule le client HTTP de `publish.py` pour le dépôt de sortie
+    (Story 4.3) : une page déjà publiée existe, avec ou sans panneau de
+    récapitulatif déjà présent."""
+
+    def __init__(self, html_publie: str):
+        self.html_publie = html_publie
+        self.put_calls = []
+        self.closed = False
+
+    def get(self, url):
+        import base64
+
+        return _FakeResponse(
+            200,
+            payload={
+                "content": base64.b64encode(self.html_publie.encode("utf-8")).decode("ascii"),
+                "sha": "sha-page",
+            },
+        )
+
+    def put(self, url, json=None):
+        self.put_calls.append((url, json))
+        return _FakeResponse(200)
+
+    def close(self):
+        self.closed = True
+
+
+def test_controler_fraicheur_publie_le_recapitulatif_des_sources_a_surveiller(tmp_path):
+    from veille import store
+
+    sources_yaml = _sources_yaml(tmp_path)
+    deja_vus_path = tmp_path / "deja-vu.sqlite3"
+    conn = store.ouvrir(deja_vus_path)
+    conn.execute(
+        "INSERT INTO sante_source (source_id, dernier_item_vu, etat) "
+        "VALUES ('test-source', '2000-01-01T00:00:00+00:00', 'active')"
+    )
+    conn.commit()
+    conn.close()
+
+    client_digest = _ClientDigestPublie("<html><body>\n<h1>Digest</h1>\n</body></html>")
+
+    reussite = pipeline.controler_fraicheur(
+        sources_path=sources_yaml,
+        deja_vus_path=deja_vus_path,
+        store_client=_ClientStoreSimule(),
+        publish_client=client_digest,
+    )
+
+    assert reussite is True
+    assert len(client_digest.put_calls) == 1  # le récapitulatif a bien été publié
+    corps_publie = client_digest.put_calls[0][1]["content"]
+    import base64
+
+    html_publie = base64.b64decode(corps_publie).decode("utf-8")
+    assert "test-source" in html_publie
+    assert "en_sommeil" in html_publie
+
+
+def test_controler_fraicheur_n_echoue_pas_si_la_publication_du_recapitulatif_echoue(tmp_path, monkeypatch):
+    """Isolation dédiée (Story 4.3) : une panne de la publication annexe
+    du récapitulatif ne doit jamais changer ce que retourne
+    `controler_fraicheur()`, gouverné uniquement par le retéléversement de
+    l'état de santé."""
+    from veille import store
+
+    sources_yaml = _sources_yaml(tmp_path)
+    deja_vus_path = tmp_path / "deja-vu.sqlite3"
+    conn = store.ouvrir(deja_vus_path)
+    conn.execute(
+        "INSERT INTO sante_source (source_id, dernier_item_vu, etat) "
+        "VALUES ('test-source', '2000-01-01T00:00:00+00:00', 'active')"
+    )
+    conn.commit()
+    conn.close()
+
+    def _publier_recapitulatif_qui_leve(*args, **kwargs):
+        raise RuntimeError("panne simulée")
+
+    monkeypatch.setattr(pipeline, "publier_recapitulatif_sante", _publier_recapitulatif_qui_leve)
+
+    reussite = pipeline.controler_fraicheur(
+        sources_path=sources_yaml,
+        deja_vus_path=deja_vus_path,
+        store_client=_ClientStoreSimule(),
+        publish_client=_ClientDigestPublie("<html><body></body></html>"),
+    )
+
+    assert reussite is True  # inchangé : gouverné par le retéléversement, pas par le récapitulatif
+
+
 def test_main_controle_sante_sort_avec_le_code_zero_si_reussi(monkeypatch):
     monkeypatch.setattr(pipeline, "controler_fraicheur", lambda **kwargs: True)
 
@@ -938,3 +1040,88 @@ def test_main_controle_sante_sort_avec_un_code_non_nul_si_echoue(monkeypatch):
         pipeline.main_controle_sante()
 
     assert exc_info.value.code == 1
+
+
+# --- Réapplication du récapitulatif après la publication nocturne (Story 4.3) ---
+
+
+def test_executer_reapplique_le_recapitulatif_apres_avoir_republie_la_page(tmp_path):
+    """Trouvé en revue (Blind Hunter, constat le plus sérieux de la Story
+    4.3) : `rendre()` régénère `index.html` sans rien savoir des marqueurs
+    du récapitulatif de santé — sans réapplication, la publication
+    nocturne normale effacerait silencieusement le panneau publié par le
+    contrôle hebdomadaire, alors même que les sources concernées restent
+    réellement `suspecte`/`en_sommeil`."""
+    from veille import store
+
+    sources_yaml = _sources_yaml(tmp_path)
+    deja_vus_path = tmp_path / "deja-vu.sqlite3"
+    conn = store.ouvrir(deja_vus_path)
+    conn.execute(
+        "INSERT INTO sante_source (source_id, dernier_item_vu, etat) "
+        "VALUES ('test-source', '2000-01-01T00:00:00+00:00', 'suspecte')"
+    )
+    conn.commit()
+    conn.close()
+
+    client_publication = _ClientPublicationAvecEtat()
+
+    reussite = pipeline.executer(
+        sources_path=sources_yaml,
+        llm_client=_ClientLLMSimule(),
+        publish_client=client_publication,
+        deja_vus_path=deja_vus_path,
+        store_client=_ClientStoreSimule(),
+    )
+
+    import base64
+
+    assert reussite is True
+    html_final = base64.b64decode(
+        client_publication._fichiers["index.html"]["content"]
+    ).decode("utf-8")
+    assert "test-source" in html_final
+    assert "RECAPITULATIF-SANTE" in html_final
+
+
+def test_controler_fraicheur_retire_le_recapitulatif_si_plus_rien_a_surveiller(tmp_path):
+    """Complète le test unitaire déjà présent dans `test_publish.py` au
+    niveau du câblage réel de `controler_fraicheur()` (trouvé en revue,
+    test-coverage gap) : AC4 — un panneau déjà publié doit être retiré une
+    fois que plus aucune source n'est à surveiller."""
+    from veille import store
+
+    from datetime import datetime, timezone
+
+    sources_yaml = _sources_yaml(tmp_path)
+    deja_vus_path = tmp_path / "deja-vu.sqlite3"
+    conn = store.ouvrir(deja_vus_path)
+    conn.execute(
+        "INSERT INTO sante_source (source_id, dernier_item_vu, etat) VALUES (?, ?, 'active')",
+        ("test-source", datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+    html_avec_panneau = (
+        "<html><body>\n"
+        "<!-- RECAPITULATIF-SANTE:DEBUT -->ancien souci<!-- RECAPITULATIF-SANTE:FIN -->\n"
+        "<h1>Digest</h1>\n</body></html>"
+    )
+    client_digest = _ClientDigestPublie(html_avec_panneau)
+
+    reussite = pipeline.controler_fraicheur(
+        sources_path=sources_yaml,
+        deja_vus_path=deja_vus_path,
+        store_client=_ClientStoreSimule(),
+        publish_client=client_digest,
+    )
+
+    import base64
+
+    assert reussite is True
+    corps_publie = client_digest.put_calls[0][1]["content"]
+    html_publie = base64.b64decode(corps_publie).decode("utf-8")
+    assert "RECAPITULATIF-SANTE" not in html_publie
+    assert "ancien souci" not in html_publie
+    assert "<h1>Digest</h1>" in html_publie

@@ -379,3 +379,48 @@ def test_rendre_bandeau_echec_n_est_pas_un_document_complet():
 
     assert "<!doctype html>" not in fragment.lower()
     assert "<body" not in fragment
+
+
+def test_rendre_recapitulatif_sante_contient_les_marqueurs_et_chaque_source():
+    from veille.render import RECAPITULATIF_SANTE_DEBUT, RECAPITULATIF_SANTE_FIN, rendre_recapitulatif_sante
+    from veille.health import SourceASurveiller
+
+    sources = [
+        SourceASurveiller(source_id="src-1", etat="suspecte", raison="45 jour(s) sans nouvel item"),
+        SourceASurveiller(source_id="src-2", etat="en_sommeil", raison="120 jour(s) sans nouvel item"),
+    ]
+
+    fragment = rendre_recapitulatif_sante(sources)
+
+    assert fragment.startswith(RECAPITULATIF_SANTE_DEBUT)
+    assert fragment.endswith(RECAPITULATIF_SANTE_FIN)
+    assert "src-1" in fragment
+    assert "suspecte" in fragment
+    assert "45 jour" in fragment
+    assert "src-2" in fragment
+    assert "en_sommeil" in fragment
+    assert "2 source" in fragment
+
+
+def test_rendre_recapitulatif_sante_echappe_le_contenu():
+    from veille.render import rendre_recapitulatif_sante
+    from veille.health import SourceASurveiller
+
+    sources = [SourceASurveiller(source_id="<script>alert(1)</script>", etat="suspecte", raison="x")]
+
+    fragment = rendre_recapitulatif_sante(sources)
+
+    assert "<script>" not in fragment
+    assert "&lt;script&gt;" in fragment
+
+
+def test_rendre_recapitulatif_sante_n_est_pas_un_document_complet():
+    from veille.render import rendre_recapitulatif_sante
+    from veille.health import SourceASurveiller
+
+    fragment = rendre_recapitulatif_sante(
+        [SourceASurveiller(source_id="src", etat="suspecte", raison="x")]
+    )
+
+    assert "<!doctype html>" not in fragment.lower()
+    assert "<body" not in fragment

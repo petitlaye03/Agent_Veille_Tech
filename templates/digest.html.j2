@@ -20,6 +20,11 @@
        adapter render.py::rendre_bandeau_echec en même temps. */
     --bandeau-echec-bg: #f9d7d5;
     --bandeau-echec-fg: #7a1f1f;
+    /* Récapitulatif des sources à surveiller (Story 4.3) — même
+       principe que le bandeau d'échec ci-dessus : injecté après coup par
+       publish.py::_inserer_fragment, variables à garder stables. */
+    --recapitulatif-bg: #fff4d6;
+    --recapitulatif-fg: #6b4e00;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -33,6 +38,8 @@
       --recommandee-border: #caa53d;
       --bandeau-echec-bg: #3a1f1f;
       --bandeau-echec-fg: #f5b8b4;
+      --recapitulatif-bg: #3a2f00;
+      --recapitulatif-fg: #f5cf5b;
     }
   }
   * { box-sizing: border-box; }

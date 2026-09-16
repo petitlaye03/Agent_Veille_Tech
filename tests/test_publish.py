@@ -400,3 +400,118 @@ def test_bandeau_echec_degrade_proprement_sur_panne_reseau():
     reussite = publish.publier_bandeau_echec("<!-- BANDEAU-ECHEC:DEBUT --><!-- BANDEAU-ECHEC:FIN -->", client=client)
 
     assert reussite is False
+
+
+# --- Récapitulatif des sources à surveiller (Story 4.3) --------------------
+
+
+def _source_a_surveiller(source_id="src", etat="suspecte", raison="45 jour(s) sans nouvel item"):
+    from veille.health import SourceASurveiller
+
+    return SourceASurveiller(source_id=source_id, etat=etat, raison=raison)
+
+
+def test_recapitulatif_insere_apres_body_quand_absent():
+    html_existant = "<html><body>\n<h1>Digest du 14 septembre</h1>\n</body></html>"
+    client = _FakeClient(get_response=_page_publiee(html_existant), put_response=_FakeResponse(200))
+
+    reussite = publish.publier_recapitulatif_sante([_source_a_surveiller()], client=client)
+
+    assert reussite is True
+    corps_publie = base64.b64decode(client.put_calls[0][1]["content"]).decode("utf-8")
+    assert "RECAPITULATIF-SANTE:DEBUT" in corps_publie
+    assert "src" in corps_publie
+    assert "Digest du 14 septembre" in corps_publie  # contenu existant préservé
+    assert client.put_calls[0][1]["sha"] == "sha-existant"
+
+
+def test_recapitulatif_remplace_plutot_que_d_empiler():
+    ancien = "<!-- RECAPITULATIF-SANTE:DEBUT -->ancien (semaine d'avant)<!-- RECAPITULATIF-SANTE:FIN -->"
+    html_existant = f"<html><body>\n{ancien}\n<h1>Digest</h1>\n</body></html>"
+    client = _FakeClient(get_response=_page_publiee(html_existant), put_response=_FakeResponse(200))
+
+    publish.publier_recapitulatif_sante([_source_a_surveiller(source_id="nouvelle-source")], client=client)
+
+    corps_publie = base64.b64decode(client.put_calls[0][1]["content"]).decode("utf-8")
+    assert corps_publie.count("RECAPITULATIF-SANTE:DEBUT") == 1
+    assert "ancien (semaine d'avant)" not in corps_publie
+    assert "nouvelle-source" in corps_publie
+    assert "<h1>Digest</h1>" in corps_publie
+
+
+def test_recapitulatif_sources_vide_retire_le_panneau_existant():
+    """AC4 : plus aucune source à surveiller — le panneau existant doit
+    être retiré, pas laissé périmé."""
+    ancien = "<!-- RECAPITULATIF-SANTE:DEBUT -->ancien-souci<!-- RECAPITULATIF-SANTE:FIN -->"
+    html_existant = f"<html><body>\n{ancien}\n<h1>Digest</h1>\n</body></html>"
+    client = _FakeClient(get_response=_page_publiee(html_existant), put_response=_FakeResponse(200))
+
+    resultat = publish.publier_recapitulatif_sante([], client=client)
+
+    assert resultat is True
+    corps_publie = base64.b64decode(client.put_calls[0][1]["content"]).decode("utf-8")
+    assert "RECAPITULATIF-SANTE" not in corps_publie
+    assert "ancien-souci" not in corps_publie
+    assert "<h1>Digest</h1>" in corps_publie
+
+
+def test_recapitulatif_sources_vide_sans_panneau_existant_ne_fait_rien():
+    html_existant = "<html><body>\n<h1>Digest</h1>\n</body></html>"
+    client = _FakeClient(get_response=_page_publiee(html_existant), put_response=_FakeResponse(200))
+
+    resultat = publish.publier_recapitulatif_sante([], client=client)
+
+    assert resultat is None
+    assert client.put_calls == []
+
+
+def test_recapitulatif_sans_page_deja_publiee_ne_fait_rien():
+    client = _FakeClient(get_response=_FakeResponse(404))
+
+    resultat = publish.publier_recapitulatif_sante([_source_a_surveiller()], client=client)
+
+    assert resultat is None
+    assert client.put_calls == []
+
+
+def test_recapitulatif_contenu_illisible_est_une_vraie_panne():
+    payload_sans_content = {"sha": "sha-existant"}
+    client = _FakeClient(get_response=_FakeResponse(200, payload=payload_sans_content))
+
+    resultat = publish.publier_recapitulatif_sante([_source_a_surveiller()], client=client)
+
+    assert resultat is False
+
+
+def test_recapitulatif_degrade_proprement_sans_jeton(monkeypatch):
+    monkeypatch.setattr(publish, "_jeton_depuis_env", lambda: None)
+    monkeypatch.setattr(publish, "_jeton_depuis_gh_cli", lambda: None)
+
+    resultat = publish.publier_recapitulatif_sante([_source_a_surveiller()])
+
+    assert resultat is False
+
+
+def test_recapitulatif_degrade_proprement_sur_panne_reseau():
+    client = _FakeClient(get_leve=httpx.ConnectError("panne réseau"))
+
+    resultat = publish.publier_recapitulatif_sante([_source_a_surveiller()], client=client)
+
+    assert resultat is False
+
+
+def test_recapitulatif_bout_en_bout_avec_le_vrai_fragment_rendu():
+    """Même précaution qu'en Story 3.2 pour le bandeau d'échec : combiner
+    le vrai `render.rendre_recapitulatif_sante` avec `publish.publier_
+    recapitulatif_sante` — une dérive du format des marqueurs entre les
+    deux modules serait passée inaperçue si chacun n'était testé
+    qu'isolément avec des marqueurs écrits à la main."""
+    html_existant = "<html><body>\n<h1>Digest</h1>\n</body></html>"
+    client = _FakeClient(get_response=_page_publiee(html_existant), put_response=_FakeResponse(200))
+
+    reussite = publish.publier_recapitulatif_sante([_source_a_surveiller(source_id="flux-x")], client=client)
+
+    assert reussite is True
+    corps_publie = base64.b64decode(client.put_calls[0][1]["content"]).decode("utf-8")
+    assert "flux-x" in corps_publie
+    assert "<h1>Digest</h1>" in corps_publie

@@ -483,3 +483,93 @@ def test_rapport_sante_resume_liste_les_transitions_triees():
     resume = rapport.resume()
     assert "2 changement" in resume
     assert resume.index("a (") < resume.index("b (")
+
+
+# --- lister_sources_a_surveiller (Story 4.3) ----------------------------
+
+
+def test_lister_sources_a_surveiller_vide_par_defaut(tmp_path):
+    conn = store.ouvrir(tmp_path / "d.sqlite3")
+    resultat = health.lister_sources_a_surveiller(conn, date.today())
+    conn.close()
+    assert resultat == []
+
+
+def test_lister_sources_a_surveiller_raison_par_age(tmp_path):
+    conn = store.ouvrir(tmp_path / "d.sqlite3")
+    health.enregistrer_activite("src", [_item(jours_avant=45)], conn)
+    health.evaluer_fraicheur([_source("src")], conn, date.today())
+
+    resultat = health.lister_sources_a_surveiller(conn, date.today())
+    conn.close()
+
+    assert len(resultat) == 1
+    assert resultat[0].source_id == "src"
+    assert resultat[0].etat == health.ETAT_SUSPECTE
+    assert "jour" in resultat[0].raison
+    assert "dates suspectes" not in resultat[0].raison
+
+
+def test_lister_sources_a_surveiller_raison_par_dates_suspectes(tmp_path):
+    conn = store.ouvrir(tmp_path / "d.sqlite3")
+    instant = datetime.now(timezone.utc)
+    items = [
+        _item_avec_date(instant, guid="a"),
+        _item_avec_date(instant, guid="b"),
+        _item_avec_date(instant, guid="c"),
+    ]
+    health.enregistrer_activite("src", items, conn)
+    health.evaluer_fraicheur([_source("src")], conn, date.today())
+
+    resultat = health.lister_sources_a_surveiller(conn, date.today())
+    conn.close()
+
+    assert len(resultat) == 1
+    assert resultat[0].etat == health.ETAT_SUSPECTE
+    assert "dates suspectes" in resultat[0].raison
+    assert "jour" not in resultat[0].raison
+
+
+def test_lister_sources_a_surveiller_raison_combinee(tmp_path):
+    conn = store.ouvrir(tmp_path / "d.sqlite3")
+    ancien = datetime.now(timezone.utc) - timedelta(days=45)
+    items = [
+        _item_avec_date(ancien, guid="a"),
+        _item_avec_date(ancien, guid="b"),
+        _item_avec_date(ancien, guid="c"),
+    ]
+    health.enregistrer_activite("src", items, conn)
+    health.evaluer_fraicheur([_source("src")], conn, date.today())
+
+    resultat = health.lister_sources_a_surveiller(conn, date.today())
+    conn.close()
+
+    assert len(resultat) == 1
+    assert "jour" in resultat[0].raison
+    assert "dates suspectes" in resultat[0].raison
+
+
+def test_lister_sources_a_surveiller_isole_une_ligne_corrompue(tmp_path):
+    conn = store.ouvrir(tmp_path / "d.sqlite3")
+    conn.execute(
+        "INSERT INTO sante_source (source_id, dernier_item_vu, etat) VALUES "
+        "('corrompue', 'ceci-n-est-pas-une-date', 'suspecte')"
+    )
+    health.enregistrer_activite("saine", [_item(jours_avant=45)], conn)
+    health.evaluer_fraicheur([_source("corrompue"), _source("saine")], conn, date.today())
+
+    resultat = health.lister_sources_a_surveiller(conn, date.today())
+    conn.close()
+
+    ids = {s.source_id for s in resultat}
+    assert "saine" in ids
+    # La ligne corrompue apparaît quand même (etat != active), mais sans
+    # planter — raison indéterminée faute de date exploitable.
+    corrompue = next(s for s in resultat if s.source_id == "corrompue")
+    assert corrompue.raison == "raison indéterminée"
+
+
+def test_lister_sources_a_surveiller_degrade_sans_lever_si_la_connexion_echoue(tmp_path):
+    conn = store.ouvrir(tmp_path / "d.sqlite3")
+    conn.close()
+    assert health.lister_sources_a_surveiller(conn, date.today()) == []

@@ -309,3 +309,95 @@ def sources_en_sommeil(conn: sqlite3.Connection) -> set[str]:
     except Exception:  # noqa: BLE001 — isolation totale (AD-6)
         logger.exception("Échec de la lecture des sources en sommeil — aucune source ignorée par prudence.")
         return set()
+
+
+@dataclass(frozen=True)
+class SourceASurveiller:
+    """Une ligne du récapitulatif consultable (Story 4.3, FR-13) — `raison`
+    est reconstruite à partir des données déjà persistées (âge de
+    `dernier_item_vu`, `dates_suspectes`), pas une nouvelle colonne
+    séparée : une seule source de vérité pour ces deux observations,
+    déjà écrites par `enregistrer_activite` (Stories 4.1/4.2)."""
+
+    source_id: str
+    etat: str
+    raison: str
+
+
+def lister_sources_a_surveiller(
+    conn: sqlite3.Connection,
+    aujourdhui: date,
+    sources_configurees=None,
+) -> list[SourceASurveiller]:
+    """Liste les sources actuellement `suspecte`/`en_sommeil` (`etat !=
+    active`), avec leur raison en texte — consultée par le contrôle
+    hebdomadaire pour publier un récapitulatif (Story 4.3, AC1/AC2),
+    plutôt que de forcer une lecture directe de la base.
+
+    Reflète l'état **courant**, pas un journal des changements passés —
+    distinct de `RapportSante.transitions` (rapport d'un seul run
+    d'`evaluer_fraicheur`), qui ne dit rien des sources déjà `suspecte`
+    avant ce run. `aujourdhui` est un paramètre explicite, jamais lu en
+    interne via `datetime.now()` — même discipline qu'`evaluer_fraicheur`.
+
+    `sources_configurees` (optionnel, itérable d'objets `.id` — typiquement
+    `list[SourceConfig]`, trouvé en revue) : si fourni, une ligne dont le
+    `source_id` n'y figure plus est exclue du résultat. Sans ce filtre, une
+    source retirée de `sources.yaml` (le remède même que la Story 4.3
+    documente — « il décide s'il les répare ou les retire ») resterait
+    indéfiniment affichée : `evaluer_fraicheur` ne visite plus que les
+    sources encore configurées, donc `etat` d'une source retirée reste
+    figé pour toujours, sans qu'aucun mécanisme ne l'efface. `None` (par
+    défaut) désactive ce filtre, pour les appelants qui n'ont pas cette
+    liste sous la main.
+
+    Isolée globalement **et** par ligne (même patron qu'`evaluer_fraicheur`,
+    Story 4.1) : une ligne corrompue ne doit jamais empêcher de lister les
+    autres. Ne lève jamais (AD-6) : dégrade en liste vide plutôt que de
+    faire perdre le contrôle en cours.
+    """
+    ids_configures = (
+        {s.id for s in sources_configurees} if sources_configurees is not None else None
+    )
+
+    resultats: list[SourceASurveiller] = []
+    try:
+        lignes = conn.execute(
+            "SELECT source_id, dernier_item_vu, etat, dates_suspectes "
+            "FROM sante_source WHERE etat != ?",
+            (ETAT_ACTIF,),
+        ).fetchall()
+    except Exception:  # noqa: BLE001 — isolation totale (AD-6)
+        logger.exception("Échec de la lecture des sources à surveiller — récapitulatif vide par prudence.")
+        return []
+
+    for source_id, dernier_item_vu_str, etat, dates_suspectes in lignes:
+        if ids_configures is not None and source_id not in ids_configures:
+            continue
+        try:
+            raisons = []
+            if dernier_item_vu_str:
+                try:
+                    dernier_item_vu = datetime.fromisoformat(dernier_item_vu_str)
+                    age_jours = (aujourdhui - dernier_item_vu.date()).days
+                    if age_jours > SEUIL_SUSPECTE_JOURS:
+                        raisons.append(f"{age_jours} jour(s) sans nouvel item")
+                except (ValueError, TypeError):
+                    # Trouvé en revue (Edge Case Hunter) : une valeur non-
+                    # chaîne (corruption/migration future) lève `TypeError`,
+                    # pas `ValueError` — sans capturer les deux, la source
+                    # entière disparaissait du récapitulatif au lieu de
+                    # simplement dégrader sur la raison par âge.
+                    pass
+            if dates_suspectes:
+                raisons.append("dates suspectes détectées (plusieurs items à la même minute)")
+            raison = " ; ".join(raisons) if raisons else "raison indéterminée"
+            resultats.append(SourceASurveiller(source_id=source_id, etat=etat, raison=raison))
+        except Exception:  # noqa: BLE001 — isolation par ligne (AD-6)
+            logger.exception(
+                "Échec de la reconstruction de la raison pour la source '%s' — ignorée dans le récapitulatif.",
+                source_id,
+            )
+            continue
+
+    return resultats

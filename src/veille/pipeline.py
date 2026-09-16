@@ -19,7 +19,7 @@ import httpx
 from veille import collect, health, store
 from veille.enrich.llm import enrichir, marquer_recommandation
 from veille.filter import CHAMPS_QUOTAS, charger_ponderations
-from veille.publish import publier, publier_archive, publier_bandeau_echec
+from veille.publish import publier, publier_archive, publier_bandeau_echec, publier_recapitulatif_sante
 from veille.render import rendre, rendre_bandeau_echec, rendre_markdown
 
 logger = logging.getLogger(__name__)
@@ -107,6 +107,9 @@ def executer(
         scoring_path_resolu = (
             collect.DEFAULT_SCORING_PATH if scoring_path is None else scoring_path
         )
+        sources_path_resolu = (
+            collect.DEFAULT_SOURCES_PATH if sources_path is None else sources_path
+        )
 
         store.synchroniser_depuis_distant(deja_vus_path, client=store_client)
         try:
@@ -141,6 +144,39 @@ def executer(
 
             markdown = rendre_markdown(entrees, maintenant)
             archive_ok = publier_archive(markdown, maintenant.date(), client=publish_client)
+
+            if store_conn is not None:
+                # Isolé de son propre `try` (trouvé en revue de la Story 4.3,
+                # Blind Hunter, constat le plus sérieux de cette revue) : la
+                # page vient d'être régénérée depuis zéro par `rendre()`, qui
+                # ignore tout des marqueurs du récapitulatif de santé — sans
+                # cette réapplication, la publication nocturne normale
+                # effacerait silencieusement le panneau publié par le
+                # contrôle hebdomadaire, dès la nuit suivante, alors même que
+                # les sources concernées restent réellement `suspecte`/
+                # `en_sommeil`. Toujours tentée, indépendamment de `page_ok`/
+                # `archive_ok` : `publier_recapitulatif_sante` patche la page
+                # actuellement publiée (celle-ci ou une précédente), pas
+                # seulement le contenu de ce run — aucune des garanties
+                # AD-11 (marquage après succès) ne s'applique ici, ce
+                # panneau est purement idempotent, jamais un état à protéger
+                # d'une reprise.
+                try:
+                    sources_config = collect.load_sources(sources_path_resolu)
+                    a_surveiller = health.lister_sources_a_surveiller(
+                        store_conn, maintenant.date(), sources_configurees=sources_config
+                    )
+                    if publier_recapitulatif_sante(a_surveiller, client=publish_client) is False:
+                        logger.warning(
+                            "Republication du récapitulatif des sources à "
+                            "surveiller en échec après la collecte nocturne."
+                        )
+                except Exception:  # noqa: BLE001 — voir commentaire ci-dessus
+                    logger.exception(
+                        "Échec de la republication du récapitulatif des "
+                        "sources à surveiller après la collecte nocturne — "
+                        "le digest reste publié normalement."
+                    )
 
             if page_ok and archive_ok and store_conn is not None:
                 # Isolé de son propre `try` (trouvé en revue) : la publication
@@ -255,22 +291,36 @@ def controler_fraicheur(
     sources_path: str | Path | None = None,
     deja_vus_path: str | Path | None = None,
     store_client: httpx.Client | None = None,
+    publish_client: httpx.Client | None = None,
 ) -> bool:
-    """Contrôle de fraîcheur hebdomadaire (FR-12/13, Story 4.1) : synchronise
-    l'état depuis le dépôt source, réévalue chaque source configurée
-    (`health.evaluer_fraicheur`), journalise le résumé, retéléverse l'état.
+    """Contrôle de fraîcheur hebdomadaire (FR-12/13, Stories 4.1/4.3) :
+    synchronise l'état depuis le dépôt source, réévalue chaque source
+    configurée (`health.evaluer_fraicheur`), journalise le résumé,
+    retéléverse l'état, puis publie un récapitulatif consultable des
+    sources à surveiller sur la page du digest déjà publiée (Story 4.3).
 
     Point d'entrée distinct d'`executer()` (voir `main_controle_sante`,
     invoqué par un second workflow GitHub Actions, `controle-hebdomadaire.yml`,
     indépendant de `pipeline-nocturne.yml`) : une panne de l'un ne doit
     jamais affecter l'autre.
 
+    `publish_client` (Story 4.3) est **distinct** de `store_client` : il
+    vise le **dépôt de sortie** (digest publié, `DIGEST_PUBLISH_TOKEN`),
+    pas le dépôt source (`SOURCE_GITHUB_TOKEN`) que `store_client` vise
+    déjà — même distinction que `store_conn`/`publish_client` dans
+    `executer()`.
+
     Ne lève jamais (même filet de sécurité qu'`executer()`). Retourne
     `True` si le contrôle a pu s'exécuter et l'état a été retéléversé avec
     succès, `False` sinon — un retour `False` **n'indique jamais** qu'une
     source est en panne (ça, `RapportSante.resume()` le journalise déjà en
     détail), seulement que le mécanisme lui-même (ouverture locale,
-    retéléversement) a échoué.
+    retéléversement) a échoué. La publication du récapitulatif (Story 4.3)
+    est isolée de son propre `try/except` : une panne de cette étape
+    annexe ne doit jamais changer ce que retourne cette fonction, qui
+    reste gouverné par la synchronisation/le retéléversement de l'état de
+    santé (même discipline que le marquage déjà-vu dans `executer()`,
+    Story 3.4).
     """
     try:
         store.synchroniser_depuis_distant(deja_vus_path, client=store_client)
@@ -291,6 +341,25 @@ def controler_fraicheur(
             aujourdhui = datetime.now(timezone.utc).date()
             rapport = health.evaluer_fraicheur(sources, conn, aujourdhui)
             logger.info(rapport.resume())
+
+            try:
+                a_surveiller = health.lister_sources_a_surveiller(
+                    conn, aujourdhui, sources_configurees=sources
+                )
+                if publier_recapitulatif_sante(a_surveiller, client=publish_client) is False:
+                    # Trouvé en revue (Edge Case Hunter) : le retour `False`
+                    # (panne réelle, distincte d'une exception) n'était
+                    # vérifié nulle part — un échec silencieux de plus.
+                    logger.warning(
+                        "Publication du récapitulatif des sources à "
+                        "surveiller en échec."
+                    )
+            except Exception:  # noqa: BLE001 — voir docstring : n'affecte jamais le retour
+                logger.exception(
+                    "Échec de la publication du récapitulatif des sources à "
+                    "surveiller — le contrôle de fraîcheur lui-même reste "
+                    "inchangé."
+                )
 
             reussite = store.televerser_vers_distant(deja_vus_path, client=store_client)
             if not reussite:

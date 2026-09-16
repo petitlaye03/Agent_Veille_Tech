@@ -2,20 +2,23 @@
 #
 # Distinct de `pipeline-nocturne.yml` (Story 3.1) — cadence différente
 # (hebdomadaire vs nocturne) et panne isolée de l'un à l'autre (AC6 de la
-# story) : ce job ne collecte ni ne publie rien, il ne fait que lire
-# `sources.yaml` et l'état de santé déjà accumulé (`sante_source`,
-# alimenté chaque nuit par `pipeline-nocturne.yml`) pour transitionner
-# l'état de chaque source (`active`/`suspecte`/`en_sommeil`).
+# story) : ce job ne collecte rien, il ne fait que lire `sources.yaml` et
+# l'état de santé déjà accumulé (`sante_source`, alimenté chaque nuit par
+# `pipeline-nocturne.yml`) pour transitionner l'état de chaque source
+# (`active`/`suspecte`/`en_sommeil`) — et publier, depuis la Story 4.3, un
+# récapitulatif consultable des sources à surveiller sur la page du
+# digest déjà publiée (dépôt de sortie).
 #
-# Prérequis réels avant que ce workflow puisse réussir (aucun nouveau par
-# rapport à `pipeline-nocturne.yml`, mêmes secrets déjà en place depuis la
-# Story 3.4) :
-#   - aucun secret supplémentaire : SOURCE_GITHUB_TOKEN est mappé sur le
-#     jeton ambiant du job (secrets.GITHUB_TOKEN, scopé à ce dépôt-ci grâce
-#     à `permissions: contents: write` ci-dessous) — même mécanisme que le
-#     pipeline nocturne pour l'état « déjà vu »
-#   - ni ANTHROPIC_API_KEY ni DIGEST_PUBLISH_TOKEN : ce job ne rend, n'enrichit
-#     ni ne publie rien, il ne touche que l'état de santé sur ce dépôt-ci
+# Prérequis réels avant que ce workflow puisse réussir :
+#   - aucun secret supplémentaire pour l'état de santé : SOURCE_GITHUB_TOKEN
+#     est mappé sur le jeton ambiant du job (secrets.GITHUB_TOKEN, scopé à
+#     ce dépôt-ci grâce à `permissions: contents: write` ci-dessous) — même
+#     mécanisme que le pipeline nocturne pour l'état « déjà vu »
+#   - DIGEST_PUBLISH_TOKEN (Story 4.3, nouveau prérequis) : même secret que
+#     `pipeline-nocturne.yml` utilise déjà pour le dépôt de sortie — aucun
+#     nouveau secret à créer si ce dépôt a déjà été configuré (Story 1.8)
+#   - ni ANTHROPIC_API_KEY (ce job n'enrichit rien) ni collecte réseau par
+#     source (il ne touche que l'état de santé et le récapitulatif)
 #
 # Même risque connu que `pipeline-nocturne.yml`, non contourné ici non plus :
 # GitHub désactive silencieusement un déclencheur `schedule` après 60 jours
@@ -66,4 +69,11 @@ jobs:
       - name: Exécuter le contrôle de fraîcheur
         env:
           SOURCE_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # État de santé : dépôt courant, jeton ambiant du job.
+          # Récapitulatif des sources à surveiller (Story 4.3) : dépôt de
+          # sortie, même secret que `pipeline-nocturne.yml` — mappé sur
+          # GITHUB_TOKEN (nom attendu par publish.py, inchangé), pas le
+          # jeton ambiant que ce nom évoque d'habitude (même précaution
+          # que dans pipeline-nocturne.yml).
+          GITHUB_TOKEN: ${{ secrets.DIGEST_PUBLISH_TOKEN }}
         run: uv run python -m veille.pipeline --controle-sante

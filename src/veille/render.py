@@ -6,6 +6,7 @@ scoring, de filtrage ni d'appel réseau ici — seulement de la mise en forme
 sur des `Entree` déjà produites par `filter.py`/`enrich/llm.py`.
 """
 
+import html
 import logging
 import re
 from datetime import date, datetime
@@ -273,4 +274,65 @@ def rendre_bandeau_echec(date_echec: date) -> str:
         "disponible.\n"
         "</div>\n"
         f"{BANDEAU_ECHEC_FIN}"
+    )
+
+
+# Marqueurs stables délimitant le récapitulatif des sources à surveiller
+# dans le HTML publié (Story 4.3) — même principe que le bandeau d'échec :
+# `publish.publier_recapitulatif_sante` les utilise pour remplacer le
+# panneau plutôt que de l'empiler, ou pour le retirer une fois qu'il n'y a
+# plus rien à signaler (AC4).
+RECAPITULATIF_SANTE_DEBUT = "<!-- RECAPITULATIF-SANTE:DEBUT -->"
+RECAPITULATIF_SANTE_FIN = "<!-- RECAPITULATIF-SANTE:FIN -->"
+
+
+def rendre_recapitulatif_sante(sources: list) -> str:
+    """Fragment HTML listant les sources actuellement `suspecte`/`en_sommeil`
+    (Story 4.3, AC1) — destiné à être inséré/remplacé après coup dans le
+    HTML déjà publié par `publish.publier_recapitulatif_sante`, jamais
+    rendu ni publié seul (même patron que `rendre_bandeau_echec`).
+
+    `sources` : `list[health.SourceASurveiller]` — non typé explicitement
+    ici pour ne pas faire dépendre `render.py` de `health.py` (aucun autre
+    import inter-module de ce sens dans le projet ; les deux attributs
+    utilisés, `source_id`/`etat`/`raison`, sont de simples chaînes).
+
+    N'est **jamais** appelée avec une liste vide (décision de l'appelant,
+    `publish.publier_recapitulatif_sante` : une liste vide signifie
+    retirer le panneau existant, pas publier un panneau vide) — **imposé**
+    ici, pas seulement documenté (trouvé en revue, convergence blind+edge :
+    le contrat n'était vérifié que par la discipline du seul appelant
+    existant, un futur appel direct avec une liste vide aurait rendu un
+    panneau « 0 source(s) à surveiller » silencieusement absurde plutôt
+    que d'échouer bruyamment).
+
+    `source_id`/`raison`/`etat` échappés via `html.escape` (défensif :
+    `source_id` vient de `sources.yaml`, de la configuration plutôt que
+    d'une source externe, mais rien ne garantit qu'il ne contient jamais
+    de caractère spécial HTML — coût nul, jamais de raison de ne pas
+    échapper une chaîne insérée telle quelle dans un document HTML).
+    """
+    if not sources:
+        raise ValueError(
+            "rendre_recapitulatif_sante() ne doit jamais être appelée avec une "
+            "liste vide — l'appelant doit retirer le panneau existant plutôt "
+            "que d'en publier un vide (voir publish.publier_recapitulatif_sante)."
+        )
+    lignes_html = "\n".join(
+        "<li><strong>{id}</strong> — {etat} : {raison}</li>".format(
+            id=html.escape(s.source_id),
+            etat=html.escape(s.etat),
+            raison=html.escape(s.raison),
+        )
+        for s in sources
+    )
+    return (
+        f"{RECAPITULATIF_SANTE_DEBUT}\n"
+        '<div style="background:var(--recapitulatif-bg);'
+        "color:var(--recapitulatif-fg);padding:0.75rem 1rem;"
+        'border-radius:8px;margin:0 0 1rem;font-size:0.95rem;">\n'
+        f"🔎 {len(sources)} source(s) à surveiller :\n"
+        f"<ul style=\"margin:0.5rem 0 0;padding-left:1.25rem;\">\n{lignes_html}\n</ul>\n"
+        "</div>\n"
+        f"{RECAPITULATIF_SANTE_FIN}"
     )
