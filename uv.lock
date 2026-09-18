@@ -374,6 +374,23 @@ wheels = [
 ]
 
 [[package]]
+name = "openai"
+version = "3.16.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "httpx2" },
+    { name = "jiter" },
+    { name = "pydantic" },
+    { name = "sniffio" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/6b/d7/79e049e0e2e63792910827aaa9b8a814d1b214fa4dbe901040c384a1cf57/openai-3.16.0.tar.gz", hash = "sha256:08c6bd1db3d69039bdd0af63f1d1ba007fde93460257925c49d49c8d7ad15b9e", size = 1671137, upload-time = "2026-09-18T14:53:40.089Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f2/61/d8e79383c607faca8ffa2db61b238e0af3f5f2056d35620ad39dcdf6dc94/openai-3.16.0-py3-none-any.whl", hash = "sha256:45b47caea12c09d6241642a244fc208bdde887ccd6408ffe4fb73608bb15815d", size = 2030929, upload-time = "2026-09-18T14:53:37.982Z" },
+]
+
+[[package]]
 name = "packaging"
 version = "26.2"
 source = { registry = "https://pypi.org/simple" }
@@ -655,6 +672,7 @@ dependencies = [
     { name = "feedparser" },
     { name = "httpx" },
     { name = "jinja2" },
+    { name = "openai" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
 ]
@@ -671,6 +689,7 @@ requires-dist = [
     { name = "feedparser", specifier = ">=6.0.13" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "jinja2", specifier = ">=3.1.6" },
+    { name = "openai", specifier = ">=3.16.0" },
     { name = "python-dotenv", specifier = ">=1.2.3" },
     { name = "pyyaml", specifier = ">=6.0.3" },
 ]

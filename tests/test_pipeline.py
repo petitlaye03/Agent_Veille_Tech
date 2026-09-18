@@ -10,6 +10,7 @@ import httpx
 import pytest
 
 from veille import discover, pipeline, publish, store
+from veille.enrich import llm
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
@@ -49,6 +50,17 @@ def _isoler_le_stockage_deja_vu(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "_jeton", lambda: None)
     monkeypatch.setattr(publish, "_jeton", lambda: None)
     monkeypatch.setattr(discover, "CONNECTORS", {})
+    # `llm.load_dotenv` neutralisée (trouvé en implémentation de la bascule
+    # de fournisseur LLM, 2026-09-18) : depuis qu'un vrai `.env` existe sur
+    # la machine (LLM_PROVIDER=openai + OPENAI_API_KEY réelle, nécessaires
+    # à l'usage réel), un test qui ne fournit pas de `llm_client` explicite
+    # à `executer()` — donc laisse `enrichir()` résoudre son propre client —
+    # aurait résolu ce **vrai** client OpenAI et fait de vrais appels réseau
+    # facturés par item, `ANTHROPIC_API_KEY` absente n'y changeant plus
+    # rien depuis qu'un second fournisseur existe. Même réflexe que pour
+    # `store._jeton`/`publish._jeton`/`discover.CONNECTORS` ci-dessus.
+    monkeypatch.setattr(llm, "load_dotenv", lambda: None)
+    monkeypatch.setattr(llm, "_env_charge", False)
 
 
 def _sources_yaml(tmp_path):

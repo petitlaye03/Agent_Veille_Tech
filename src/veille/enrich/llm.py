@@ -1,9 +1,20 @@
 """Frontière LLM unique (AD-7, FR-7/8).
 
-Seul module du projet qui appelle l'API Claude — le modèle et le budget
-sont paramétrés ici, aucune autre partie du code ne doit importer
-`anthropic`. Génère une accroche courte en français pour chaque item
+Seul module du projet qui appelle un LLM — le modèle et le budget sont
+paramétrés ici, aucune autre partie du code ne doit importer `anthropic`
+ni `openai`. Génère une accroche courte en français pour chaque item
 retenu, même depuis une source anglophone.
+
+**Deux fournisseurs pris en charge** (bascule temporaire, 2026-09-18 —
+problème de carte bancaire côté crédits Anthropic, en attendant une autre
+solution) : Anthropic (`claude-haiku-4-5-20251001`, défaut historique) et
+OpenAI (`gpt-4o-mini`). Choix piloté par `LLM_PROVIDER` (`.env`, AD-3 —
+jamais codé en dur), jamais deviné implicitement à partir des clés
+présentes : un changement de fournisseur doit être une décision explicite,
+pas un effet de bord de la présence d'une variable d'environnement.
+`_client()` résout le fournisseur **et** son client réel ensemble — AD-7
+reste respectée (un seul point d'import de chaque SDK, toujours ce fichier),
+seul le SDK effectivement sollicité change selon la config.
 
 Coût maîtrisé par construction plutôt que mesuré après coup : prompt court
 (titre + extrait tronqué), `max_tokens` borné, un seul appel par item, pas
@@ -21,6 +32,7 @@ import logging
 import os
 
 import anthropic
+import openai
 from dotenv import load_dotenv
 
 from veille.filter import ItemScore, Ponderations
@@ -28,9 +40,19 @@ from veille.models import Entree, Item
 
 logger = logging.getLogger(__name__)
 
-# Modèle éco (Stack de l'architecture, AD-7) : c'est ce choix, pas un modèle
-# plus lourd, qui rend la cible de budget (NFR1) atteignable.
-MODELE = "claude-haiku-4-5-20251001"
+# Modèles éco (Stack de l'architecture, AD-7) : c'est ce choix, pas un
+# modèle plus lourd, qui rend la cible de budget (NFR1) atteignable, pour
+# les deux fournisseurs.
+MODELE_ANTHROPIC = "claude-haiku-4-5-20251001"
+MODELE_OPENAI = "gpt-4o-mini"
+
+# `LLM_PROVIDER` : seules ces deux valeurs sont reconnues (normalisées en
+# minuscules) ; toute autre valeur (absente, vide, mal orthographiée)
+# dégrade sur le défaut historique, journalisé une fois — jamais un
+# plantage pour une variable d'environnement mal renseignée (même réflexe
+# que `charger_profil`/`charger_quotas`).
+FOURNISSEURS_VALIDES = ("anthropic", "openai")
+FOURNISSEUR_DEFAUT = "anthropic"
 
 # Borne de sortie cohérente avec « 1 à 3 phrases » — un plafond bas est
 # lui-même un garde-fou de coût si le modèle dérive.
@@ -62,42 +84,145 @@ _avertissement_cle_absente_emis = False
 _avertissement_echec_api_emis = False
 
 
-def _client() -> anthropic.Anthropic | None:
-    """Construit le client Anthropic depuis `ANTHROPIC_API_KEY` (`.env`).
+def _fournisseur() -> str:
+    """Résout `LLM_PROVIDER` (`.env`), normalisé en minuscules — jamais
+    codé en dur (AD-3). Dégrade sur `FOURNISSEUR_DEFAUT` si absent ou non
+    reconnu, journalisé dans ce dernier cas (une valeur présente mais
+    mal orthographiée est une faute de configuration silencieuse sinon)."""
+    valeur = (os.environ.get("LLM_PROVIDER") or "").strip().lower()
+    if not valeur:
+        return FOURNISSEUR_DEFAUT
+    if valeur in FOURNISSEURS_VALIDES:
+        return valeur
+    logger.warning(
+        "LLM_PROVIDER='%s' non reconnu (attendu : %s) — repli sur '%s'.",
+        valeur,
+        "/".join(FOURNISSEURS_VALIDES),
+        FOURNISSEUR_DEFAUT,
+    )
+    return FOURNISSEUR_DEFAUT
+
+
+def _client() -> tuple[str, object | None]:
+    """Résout le fournisseur LLM actif (`_fournisseur()`) et construit son
+    client (`anthropic.Anthropic`/`openai.OpenAI`) depuis la clé d'API
+    correspondante (`.env`).
 
     Ne lève jamais : une clé absente est une configuration incomplète, pas
     une erreur fatale — même réflexe que `charger_profil`/`charger_quotas`.
-    Dégrade vers `None`, journalisé une seule fois par run (pas une fois par
-    item : `enrichir()` appelle cette fonction pour chaque entrée quand
-    aucun client n'est fourni, et un digest complet peut compter jusqu'à
-    ~240 items).
+    Dégrade vers `(fournisseur, None)`, journalisé une seule fois par run
+    (pas une fois par item : `enrichir()` appelle cette fonction pour
+    chaque entrée quand aucun client n'est fourni, et un digest complet
+    peut compter jusqu'à ~240 items).
 
     La clé est nettoyée des espaces de bordure avant le test de présence :
     une variable d'environnement composée uniquement d'espaces (copier-coller
     malheureux) passerait sinon le test `if not cle` et produirait un client
     construit avec une clé inutilisable — un échec API par item plutôt que
-    l'unique avertissement « clé absente » voulu (trouvé en revue).
+    l'unique avertissement « clé absente » voulu (trouvé en revue de la
+    Story 1.6, même piège vérifié ici pour les deux fournisseurs).
     """
     global _env_charge, _avertissement_cle_absente_emis
     if not _env_charge:
         load_dotenv()
         _env_charge = True
 
-    cle = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
+    fournisseur = _fournisseur()
+    nom_cle = "OPENAI_API_KEY" if fournisseur == "openai" else "ANTHROPIC_API_KEY"
+    cle = (os.environ.get(nom_cle) or "").strip()
+
     if not cle:
         if not _avertissement_cle_absente_emis:
             logger.warning(
-                "ANTHROPIC_API_KEY absente — aucune accroche ne sera générée "
-                "(repli sur le titre original pour chaque entrée)."
+                "%s absente (fournisseur LLM actif : '%s') — aucune accroche "
+                "ne sera générée (repli sur le titre original pour chaque "
+                "entrée).",
+                nom_cle,
+                fournisseur,
             )
             _avertissement_cle_absente_emis = True
+        return fournisseur, None
+
+    if fournisseur == "openai":
+        return fournisseur, openai.OpenAI(api_key=cle)
+    return fournisseur, anthropic.Anthropic(api_key=cle)
+
+
+def _appeler_anthropic(client, prompt: str) -> str | None:
+    """Appel bas niveau au SDK Anthropic — extrait de `generer_accroche`
+    (Story 1.6) pour cohabiter avec `_appeler_openai` (bascule de
+    fournisseur, 2026-09-18). Renvoie `None` sur toute panne ou réponse
+    tronquée/inexploitable ; peut lever (panne réseau/API) — c'est
+    `generer_accroche`, l'appelant commun aux deux fournisseurs, qui isole
+    cette levée (AC5), pas cette fonction elle-même."""
+    reponse = client.messages.create(
+        model=MODELE_ANTHROPIC,
+        max_tokens=MAX_TOKENS_ACCROCHE,
+        system=_PROMPT_SYSTEME,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    # Une réponse coupée par la limite de tokens avant sa fin naturelle n'est
+    # pas un succès : le texte partiel serait publié tel quel, potentiellement
+    # tronqué en plein mot (trouvé en revue de la Story 1.6 — `MAX_TOKENS_ACCROCHE`
+    # borne le coût, pas la qualité de ce qui est retourné en cas de dépassement).
+    if getattr(reponse, "stop_reason", None) == "max_tokens":
         return None
 
-    return anthropic.Anthropic(api_key=cle)
+    try:
+        texte = reponse.content[0].text
+    except (IndexError, AttributeError):
+        return None
+
+    return (texte or "").strip() or None
 
 
-def generer_accroche(item: Item, client: anthropic.Anthropic | None = None) -> str | None:
+def _appeler_openai(client, prompt: str) -> str | None:
+    """Appel bas niveau au SDK OpenAI (Chat Completions), symétrique à
+    `_appeler_anthropic` — même contrat de retour (`None` sur panne/réponse
+    tronquée/inexploitable), formes de requête/réponse différentes (`system`
+    devient un message de rôle `system`, `stop_reason == "max_tokens"`
+    devient `finish_reason == "length"`, le texte vit sous
+    `choices[0].message.content` plutôt que `content[0].text`)."""
+    reponse = client.chat.completions.create(
+        model=MODELE_OPENAI,
+        max_tokens=MAX_TOKENS_ACCROCHE,
+        messages=[
+            {"role": "system", "content": _PROMPT_SYSTEME},
+            {"role": "user", "content": prompt},
+        ],
+    )
+
+    try:
+        choix = reponse.choices[0]
+    except (IndexError, AttributeError):
+        return None
+
+    if getattr(choix, "finish_reason", None) == "length":
+        return None
+
+    try:
+        texte = choix.message.content
+    except AttributeError:
+        return None
+
+    return (texte or "").strip() or None
+
+
+def generer_accroche(
+    item: Item, client: object | None = None, fournisseur: str | None = None
+) -> str | None:
     """Génère une accroche en français pour un item, ou `None` en cas d'échec.
+
+    `fournisseur` (`"anthropic"`/`"openai"`, bascule de fournisseur du
+    2026-09-18) : n'affecte le comportement que si `client` est fourni
+    explicitement (tests) — sans lui, `None` par défaut préserve exactement
+    le comportement historique (Anthropic) de tous les appels/tests
+    préexistants. Quand `client` est `None`, `fournisseur` est ignoré et
+    résolu conjointement avec le client par `_client()` — les deux ne
+    doivent jamais diverger (un client OpenAI appelé avec la forme de
+    requête Anthropic, ou l'inverse, échouerait de façon confuse plutôt que
+    proprement isolée).
 
     Isolation totale (AC5) : toute panne — réseau, quota API, authentification,
     réponse sans texte exploitable, réponse tronquée avant sa fin — est
@@ -113,7 +238,9 @@ def generer_accroche(item: Item, client: anthropic.Anthropic | None = None) -> s
     que silencieuse (trouvé en revue).
     """
     if client is None:
-        client = _client()
+        fournisseur, client = _client()
+    elif fournisseur is None:
+        fournisseur = FOURNISSEUR_DEFAUT
     if client is None:
         return None
 
@@ -121,39 +248,19 @@ def generer_accroche(item: Item, client: anthropic.Anthropic | None = None) -> s
     extrait = item.contenu_brut[:LONGUEUR_EXTRAIT]
     prompt = f"Titre : {titre}\n\nExtrait : {extrait}" if extrait else f"Titre : {titre}"
 
+    appel = _appeler_openai if fournisseur == "openai" else _appeler_anthropic
     try:
-        reponse = client.messages.create(
-            model=MODELE,
-            max_tokens=MAX_TOKENS_ACCROCHE,
-            system=_PROMPT_SYSTEME,
-            messages=[{"role": "user", "content": prompt}],
-        )
-    except anthropic.AnthropicError:
-        _avertir_echec_api(item.guid)
-        return None
-    except Exception:  # noqa: BLE001 — isolation par item, même hors AnthropicError
+        texte = appel(client, prompt)
+    except Exception:  # noqa: BLE001 — isolation par item, panne de l'un ou l'autre SDK
         _avertir_echec_api(item.guid)
         return None
 
-    # Une réponse coupée par la limite de tokens avant sa fin naturelle n'est
-    # pas un succès : le texte partiel serait publié tel quel, potentiellement
-    # tronqué en plein mot (trouvé en revue — `MAX_TOKENS_ACCROCHE` borne le
-    # coût, pas la qualité de ce qui est retourné en cas de dépassement).
-    if getattr(reponse, "stop_reason", None) == "max_tokens":
+    if texte is None:
         logger.warning(
-            "Réponse tronquée par max_tokens pour l'item '%s' — repli sur le titre.",
+            "Réponse tronquée ou inexploitable pour l'item '%s' — repli sur le titre.",
             item.guid,
         )
-        return None
-
-    try:
-        texte = reponse.content[0].text
-    except (IndexError, AttributeError):
-        logger.warning("Réponse sans texte exploitable pour l'item '%s'.", item.guid)
-        return None
-
-    texte = (texte or "").strip()
-    return texte or None
+    return texte
 
 
 def _avertir_echec_api(guid: str) -> None:
@@ -178,8 +285,16 @@ def _avertir_echec_api(guid: str) -> None:
         logger.warning("Échec de l'appel API pour l'item '%s' — repli sur le titre.", guid)
 
 
-def enrichir(items: list[Item], client: anthropic.Anthropic | None = None) -> list[Entree]:
+def enrichir(
+    items: list[Item], client: object | None = None, fournisseur: str | None = None
+) -> list[Entree]:
     """Enrichit chaque item d'une accroche en français.
+
+    `fournisseur` suit exactement la même convention que sur
+    `generer_accroche` : ignoré (résolu avec le client par `_client()`)
+    quand `client` est `None`, sinon `FOURNISSEUR_DEFAUT` ("anthropic")
+    si non précisé — préserve le comportement historique de tous les
+    appels/tests préexistants qui ne passent qu'un `client`.
 
     Isolation par item (AC5) : l'échec de l'un ne fait jamais perdre les
     autres. Décision actée le 2026-08-28 (option B) : un item dont
@@ -188,17 +303,19 @@ def enrichir(items: list[Item], client: anthropic.Anthropic | None = None) -> li
     disparaître pour une panne d'API transitoire.
 
     Le client est résolu **une seule fois** ici, pas par item (trouvé en
-    revue) : sans cela, un appel sans client explicite reconstruisait un
-    `anthropic.Anthropic()` — donc un nouveau pool de connexions — à chaque
+    revue) : sans cela, un appel sans client explicite reconstruirait un
+    nouveau client SDK — donc un nouveau pool de connexions — à chaque
     item d'un lot pouvant compter ~240 entrées.
     """
     if client is None:
-        client = _client()
+        fournisseur, client = _client()
+    elif fournisseur is None:
+        fournisseur = FOURNISSEUR_DEFAUT
 
     return [
         Entree(
             item=item,
-            accroche=generer_accroche(item, client) or item.titre or "(titre indisponible)",
+            accroche=generer_accroche(item, client, fournisseur) or item.titre or "(titre indisponible)",
         )
         for item in items
     ]

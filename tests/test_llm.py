@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import anthropic
+import openai
 import pytest
 
 from veille.enrich import llm
@@ -16,13 +17,26 @@ from veille.models import Entree, Item
 
 
 @pytest.fixture(autouse=True)
-def _reset_etat_module():
+def _reset_etat_module(monkeypatch):
     """`_client()` mémorise l'état du chargement de `.env` et l'émission de
     son avertissement au niveau du module — sans réinitialisation, l'ordre
-    d'exécution des tests changerait leur résultat."""
+    d'exécution des tests changerait leur résultat.
+
+    `load_dotenv` neutralisée aussi (trouvé en implémentation de la bascule
+    de fournisseur, 2026-09-18) : dès qu'un vrai `.env` existe sur la
+    machine (nécessaire pour l'usage réel), `load_dotenv()` remplit
+    `LLM_PROVIDER`/`OPENAI_API_KEY`/`ANTHROPIC_API_KEY` dans l'environnement
+    du process dès qu'un test les supprime pour tester le cas « absente »
+    (`monkeypatch.delenv`) — `python-dotenv` ne réécrit pas une variable
+    déjà présente, mais en comble une manquante. Sans cette neutralisation,
+    la suite dépendrait silencieusement du contenu réel du `.env` local
+    plutôt que des seules valeurs posées par chaque test (même risque de
+    principe que `store._jeton`/`publish._jeton`/`discover.CONNECTORS`
+    neutralisés ailleurs dans le projet)."""
     llm._env_charge = False
     llm._avertissement_cle_absente_emis = False
     llm._avertissement_echec_api_emis = False
+    monkeypatch.setattr(llm, "load_dotenv", lambda: None)
     yield
 
 
@@ -53,32 +67,43 @@ class _ClientSimule:
 
 
 def test_client_absent_de_cle_api_ne_leve_pas(monkeypatch):
-    """Sans ANTHROPIC_API_KEY, `_client()` dégrade vers `None` — jamais de
-    plantage, cohérent avec le reste du projet (charger_profil, etc.)."""
+    """Sans ANTHROPIC_API_KEY, `_client()` dégrade vers `(fournisseur, None)`
+    — jamais de plantage, cohérent avec le reste du projet (charger_profil,
+    etc.)."""
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
-    assert llm._client() is None
+    fournisseur, client = llm._client()
+
+    assert fournisseur == "anthropic"
+    assert client is None
 
 
 def test_client_present_avec_cle_api(monkeypatch):
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test-000")
 
-    client = llm._client()
+    fournisseur, client = llm._client()
 
+    assert fournisseur == "anthropic"
     assert client is not None
 
 
 def test_client_avec_cle_composee_uniquement_d_espaces_est_traitee_comme_absente(monkeypatch):
     """Régression (revue) : une clé blanche (copier-coller malheureux)
     passait le test `if not cle` et produisait un client inutilisable."""
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
     monkeypatch.setenv("ANTHROPIC_API_KEY", "   ")
 
-    assert llm._client() is None
+    _, client = llm._client()
+
+    assert client is None
 
 
 def test_avertissement_de_cle_absente_n_est_emis_qu_une_fois(monkeypatch, caplog):
     """Un digest compte jusqu'à ~240 items : appeler `_client()` une fois
     par item ne doit pas produire 240 avertissements identiques."""
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
     with caplog.at_level("WARNING"):
@@ -87,6 +112,61 @@ def test_avertissement_de_cle_absente_n_est_emis_qu_une_fois(monkeypatch, caplog
 
     avertissements = [r for r in caplog.records if "ANTHROPIC_API_KEY absente" in r.message]
     assert len(avertissements) == 1
+
+
+# --- Bascule de fournisseur LLM (2026-09-18) -------------------------------
+
+
+def test_fournisseur_defaut_est_anthropic_si_llm_provider_absent(monkeypatch):
+    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+
+    assert llm._fournisseur() == "anthropic"
+
+
+def test_fournisseur_openai_si_llm_provider_le_demande(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+
+    assert llm._fournisseur() == "openai"
+
+
+def test_fournisseur_insensible_a_la_casse(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "OpenAI")
+
+    assert llm._fournisseur() == "openai"
+
+
+def test_fournisseur_valeur_non_reconnue_degrade_sur_le_defaut(monkeypatch, caplog):
+    """Une faute de frappe (`LLM_PROVIDER=openia`) ne doit ni planter ni
+    basculer silencieusement sur un fournisseur non voulu — dégrade sur le
+    défaut, journalisé (contrairement à une valeur simplement absente)."""
+    monkeypatch.setenv("LLM_PROVIDER", "openia")
+
+    with caplog.at_level("WARNING"):
+        fournisseur = llm._fournisseur()
+
+    assert fournisseur == "anthropic"
+    assert any("non reconnu" in r.message for r in caplog.records)
+
+
+def test_client_resout_openai_quand_llm_provider_le_demande(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-openai-000")
+
+    fournisseur, client = llm._client()
+
+    assert fournisseur == "openai"
+    assert client is not None
+
+
+def test_client_openai_absent_de_cle_api_ne_leve_pas(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    fournisseur, client = llm._client()
+
+    assert fournisseur == "openai"
+    assert client is None
 
 
 def _make_item(**overrides):
@@ -164,7 +244,7 @@ def test_generer_accroche_transmet_le_titre_et_l_extrait_dans_le_prompt():
     contenu_envoye = requete["messages"][0]["content"]
     assert "Titre précis" in contenu_envoye
     assert "Contenu précis." in contenu_envoye
-    assert requete["model"] == llm.MODELE
+    assert requete["model"] == llm.MODELE_ANTHROPIC
     assert requete["max_tokens"] == llm.MAX_TOKENS_ACCROCHE
 
 
@@ -200,6 +280,114 @@ def test_generer_accroche_sans_client_disponible_retourne_none(monkeypatch):
     accroche = llm.generer_accroche(_make_item())
 
     assert accroche is None
+
+
+# --- Bascule de fournisseur LLM (2026-09-18) : generer_accroche via OpenAI -
+
+
+class _ChoixSimule:
+    def __init__(self, texte=None, finish_reason="stop"):
+        self.message = SimpleNamespace(content=texte)
+        self.finish_reason = finish_reason
+
+
+class _CompletionsSimulees:
+    """Simule `client.chat.completions` (OpenAI) — ne touche jamais le
+    réseau, même patron que `_MessagesSimulees` pour Anthropic."""
+
+    def __init__(self, texte=None, exception=None, finish_reason="stop"):
+        self._texte = texte
+        self._exception = exception
+        self._finish_reason = finish_reason
+        self.derniere_requete: dict | None = None
+
+    def create(self, **kwargs):
+        self.derniere_requete = kwargs
+        if self._exception:
+            raise self._exception
+        return SimpleNamespace(choices=[_ChoixSimule(self._texte, self._finish_reason)])
+
+
+class _ClientOpenAISimule:
+    def __init__(self, texte=None, exception=None, finish_reason="stop"):
+        self.chat = SimpleNamespace(completions=_CompletionsSimulees(texte, exception, finish_reason))
+
+
+def test_generer_accroche_via_openai_retourne_le_texte_de_la_reponse():
+    client = _ClientOpenAISimule(texte="Une accroche en français (OpenAI).")
+
+    accroche = llm.generer_accroche(_make_item(), client, fournisseur="openai")
+
+    assert accroche == "Une accroche en français (OpenAI)."
+
+
+def test_generer_accroche_via_openai_transmet_le_bon_modele_et_prompt():
+    client = _ClientOpenAISimule(texte="Accroche.")
+    item = _make_item(titre="Titre précis", contenu_brut="Contenu précis.")
+
+    llm.generer_accroche(item, client, fournisseur="openai")
+
+    requete = client.chat.completions.derniere_requete
+    assert requete["model"] == llm.MODELE_OPENAI
+    assert requete["messages"][0]["role"] == "system"
+    assert requete["messages"][1]["role"] == "user"
+    assert "Titre précis" in requete["messages"][1]["content"]
+    assert "Contenu précis." in requete["messages"][1]["content"]
+
+
+def test_generer_accroche_via_openai_reponse_tronquee_par_length_est_un_echec():
+    """Équivalent OpenAI de `stop_reason == "max_tokens"` côté Anthropic :
+    `finish_reason == "length"`."""
+    client = _ClientOpenAISimule(texte="Une accroche coupée en pl", finish_reason="length")
+
+    accroche = llm.generer_accroche(_make_item(), client, fournisseur="openai")
+
+    assert accroche is None
+
+
+def test_generer_accroche_via_openai_isole_une_erreur_api_sans_lever():
+    client = _ClientOpenAISimule(exception=openai.OpenAIError("panne simulée"))
+
+    accroche = llm.generer_accroche(_make_item(), client, fournisseur="openai")
+
+    assert accroche is None
+
+
+def test_generer_accroche_via_openai_reponse_sans_choix_ne_leve_pas():
+    client = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **kw: SimpleNamespace(choices=[])))
+    )
+
+    accroche = llm.generer_accroche(_make_item(), client, fournisseur="openai")
+
+    assert accroche is None
+
+
+def test_generer_accroche_sans_fournisseur_explicite_suppose_anthropic():
+    """Un `client` fourni sans `fournisseur` explicite préserve le
+    comportement historique (Anthropic) de tous les appels/tests
+    préexistants — pas de bascule silencieuse vers OpenAI."""
+    client = _ClientSimule(texte="Accroche Anthropic par défaut.")
+
+    accroche = llm.generer_accroche(_make_item(), client)
+
+    assert accroche == "Accroche Anthropic par défaut."
+
+
+def test_enrichir_bout_en_bout_avec_llm_provider_openai(monkeypatch):
+    """`enrichir()` sans client explicite, `LLM_PROVIDER=openai` : la
+    résolution du fournisseur ET du client doivent rester cohérentes de
+    bout en bout (pas de client Anthropic appelé avec la forme de requête
+    OpenAI, ou l'inverse)."""
+    monkeypatch.setenv("LLM_PROVIDER", "openai")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-openai-000")
+
+    client_espion = _ClientOpenAISimule(texte="Accroche OpenAI.")
+    monkeypatch.setattr(llm, "_client", lambda: ("openai", client_espion))
+
+    entrees = llm.enrichir([_make_item(guid="a")])
+
+    assert entrees[0].accroche == "Accroche OpenAI."
 
 
 # --- Task 4 : enrichir ----------------------------------------------------
@@ -239,7 +427,7 @@ def test_enrichir_resout_le_client_une_seule_fois(monkeypatch):
     def _client_espion():
         client = _ClientSimule(texte="Accroche.")
         appels.append(client)
-        return client
+        return "anthropic", client
 
     monkeypatch.setattr(llm, "_client", _client_espion)
 
