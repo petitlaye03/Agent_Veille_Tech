@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Veille tech — le digest du jour</title>
+<style>
+  :root {
+    --bg: #fafafa;
+    --fg: #1a1a1a;
+    --accent: #2b6cb0;
+    --muted: #666666;
+    --card-bg: #ffffff;
+    --border: #e2e2e2;
+    --recommandee-bg: #fff8e1;
+    --recommandee-border: #d9a520;
+    /* Bandeau d'échec (Story 3.2) — injecté après coup par
+       publish.py::_inserer_bandeau sur une page déjà publiée : ces
+       variables doivent donc rester stables, jamais renommées sans
+       adapter render.py::rendre_bandeau_echec en même temps. */
+    --bandeau-echec-bg: #f9d7d5;
+    --bandeau-echec-fg: #7a1f1f;
+    /* Récapitulatif des sources à surveiller (Story 4.3) — même
+       principe que le bandeau d'échec ci-dessus : injecté après coup par
+       publish.py::_inserer_fragment, variables à garder stables. */
+    --recapitulatif-bg: #fff4d6;
+    --recapitulatif-fg: #6b4e00;
+    /* Panneau « À découvrir » (Story 4.4) — même principe, injecté après
+       coup par publish.py::_inserer_fragment, variables à garder stables. */
+    --a-decouvrir-bg: #e3f0ff;
+    --a-decouvrir-fg: #1a4a7a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121212;
+      --fg: #eaeaea;
+      --accent: #7db3ff;
+      --muted: #a0a0a0;
+      --card-bg: #1e1e1e;
+      --border: #333333;
+      --recommandee-bg: #2a2410;
+      --recommandee-border: #caa53d;
+      --bandeau-echec-bg: #3a1f1f;
+      --bandeau-echec-fg: #f5b8b4;
+      --recapitulatif-bg: #3a2f00;
+      --recapitulatif-fg: #f5cf5b;
+      --a-decouvrir-bg: #17324d;
+      --a-decouvrir-fg: #9cc9f5;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 1.25rem 1rem 3rem;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.5;
+    max-width: 640px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  header { margin-bottom: 1.75rem; }
+  h1 { font-size: 1.35rem; margin: 0 0 0.3rem; }
+  .horodatage { color: var(--muted); font-size: 0.85rem; margin: 0; }
+  section.registre { margin-bottom: 2rem; }
+  h2.registre-titre {
+    font-size: 1.05rem;
+    margin: 0 0 0.75rem;
+    border-bottom: 2px solid var(--accent);
+    padding-bottom: 0.35rem;
+  }
+  article.entree {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.9rem 1rem;
+    margin-bottom: 0.75rem;
+  }
+  article.entree--recommandee {
+    background: var(--recommandee-bg);
+    border-color: var(--recommandee-border);
+  }
+  .badge-recommandee {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: var(--recommandee-border);
+    margin-bottom: 0.35rem;
+  }
+  .entree-titre { font-weight: 600; margin: 0 0 0.3rem; font-size: 1rem; }
+  .entree-titre a { color: var(--accent); text-decoration: none; }
+  .entree-titre a:hover { text-decoration: underline; }
+  .entree-accroche { margin: 0; color: var(--fg); font-size: 0.95rem; }
+  .digest-vide { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Veille tech</h1>
+  <p class="horodatage">Généré le 18/09/2026 à 17:46 (heure de Dakar)</p>
+</header>
+
+  
+    
+    <section class="registre">
+      <h2 class="registre-titre">Apprendre</h2>
+      
+      <article class="entree">
+        
+        <p class="entree-titre"><a href="https://shows.acast.com/data-gen/episodes/292-doordash-monter-une-equipe-data-science-analytics-aux-u">🇺🇸 #292 - Doordash : Monter une équipe Data Science &amp; Analytics (aux US)</a></p>
+        <p class="entree-accroche">La création d&#39;une équipe de Data Science chez Doordash illustre les enjeux clés de l&#39;analytics dans l&#39;industrie de la livraison de repas, notamment l&#39;importance de l&#39;inférence causale et l&#39;impact croissant de l&#39;IA sur le métier. Ruben Kogel partage ses choix d&#39;organisation et sa vision pour intégrer ces innovations dans une entreprise en pleine croissance.</p>
+      </article>
+      
+      <article class="entree">
+        
+        <p class="entree-titre"><a href="https://shows.acast.com/data-gen/episodes/252-sweep-lancer-le-departement-data-ia-dune-startup-stack-s">#252 - Sweep : Lancer le département Data &amp; IA d&#39;une startup (Stack, Self-Service &amp; Agents IA)</a></p>
+        <p class="entree-accroche">Le développement du département Data &amp; IA chez Sweep, une startup prometteuse financée à hauteur de 100 millions de dollars, souligne l&#39;importance croissante de l&#39;analyse de données et de l&#39;intelligence artificielle dans la gestion des quotas carbone. Adèle Guillet partage son expérience sur la création d&#39;une infrastructure moderne dédiée à ces enjeux, un modèle à suivre pour d&#39;autres entreprises.</p>
+      </article>
+      
+      <article class="entree">
+        
+        <p class="entree-titre"><a href="https://shows.acast.com/data-gen/episodes/250-malt-mettre-en-place-une-approche-mlops-et-llmops">#250 - Malt : Mettre en place une approche MLOps et LLMOps</a></p>
+        <p class="entree-accroche">L&#39;intégration d&#39;une approche MLOps au sein de Malt représente un enjeu majeur pour optimiser l&#39;exploitation des données dans un environnement de freelancing en plein essor. Face à la montée des IA génératives, structurer ces processus devient essentiel pour tirer le meilleur parti des technologies avancées et répondre aux nouvelles exigences du marché.</p>
+      </article>
+      
+    </section>
+    
+  
+    
+    <section class="registre">
+      <h2 class="registre-titre">Ce qui bouge</h2>
+      
+      <article class="entree">
+        
+        <p class="entree-titre"><a href="https://openai.com/index/amazon-partnership">OpenAI and Amazon announce strategic partnership</a></p>
+        <p class="entree-accroche">OpenAI et Amazon renforcent leur collaboration en intégrant la plateforme Frontier d&#39;OpenAI sur AWS, une avancée majeure pour l&#39;infrastructure de l&#39;IA, les modèles personnalisés et les agents IA pour les entreprises.</p>
+      </article>
+      
+      <article class="entree">
+        
+        <p class="entree-titre"><a href="https://openai.com/index/pacific-northwest-national-laboratory">Pacific Northwest National Laboratory and OpenAI partner to accelerate federal permitting</a></p>
+        <p class="entree-accroche">La collaboration entre OpenAI et le Pacific Northwest National Laboratory vise à transformer le processus de permis fédéraux grâce à l&#39;outil DraftNEPABench, promettant une réduction de 15% du temps de rédaction des documents NEPA et une mise à jour des examens d&#39;infrastructure. Ce tournant technologique pourrait révolutionner la gestion des projets d&#39;infrastructure aux États-Unis.</p>
+      </article>
+      
+      <article class="entree">
+        
+        <p class="entree-titre"><a href="https://openai.com/index/gpt-4-research">GPT-4</a></p>
+        <p class="entree-accroche">GPT-4 marque une avancée majeure dans l&#39;apprentissage profond avec son modèle multimodal capable de traiter à la fois des images et du texte. Bien qu&#39;il n&#39;atteigne pas encore les capacités humaines dans tous les contextes, il rivalise avec elles sur plusieurs évaluations professionnelles et académiques.</p>
+      </article>
+      
+    </section>
+    
+  
+    
+    <section class="registre">
+      <h2 class="registre-titre">Pour le métier</h2>
+      
+      <article class="entree">
+        
+        <p class="entree-titre"><a href="https://www.decideo.fr/AWS-et-Salesforce-etendent-leur-collaboration-pour-connecter-les-donnees-CRM-les-agents-IA-et-le-choix-des-modeles-aux_a14799.html">AWS et Salesforce étendent leur collaboration pour connecter les données CRM, les agents IA et le choix des modèles aux outils que les équipes utilisent au quotidien</a></p>
+        <p class="entree-accroche">La collaboration renforcée entre AWS et Salesforce permet d&#39;intégrer de manière fluide les données CRM et les agents d&#39;intelligence artificielle dans les outils quotidiens des équipes, transformant ainsi l&#39;interaction client et l&#39;efficacité opérationnelle. Ces nouvelles intégrations, y compris la communication vocale en temps réel, promettent d&#39;améliorer significativement l&#39;expérience utilisateur.</p>
+      </article>
+      
+      <article class="entree">
+        
+        <p class="entree-titre"><a href="https://www.decideo.fr/Des-agents-IA-pour-repondre-aux-besoins-data-des-metiers-Huwise-deploie-son-framework-agentique_a14802.html">Des agents IA pour répondre aux besoins data des métiers : Huwise déploie son framework agentique</a></p>
+        <p class="entree-accroche">Huwise lance un framework agentique qui promet de révolutionner l&#39;accès aux données métiers grâce à des agents IA sur mesure, optimisant ainsi l&#39;utilisation des marketplaces de données. Ce déploiement répond à un besoin croissant d&#39;intégration de données fiables et contextualisées pour une prise de décision éclairée.</p>
+      </article>
+      
+    </section>
+    
+  
+
+</body>
+</html>
