@@ -20,15 +20,15 @@
 # Actions, pas un mécanisme distinct.
 #
 # Prérequis réels avant que ce workflow puisse réussir :
-#   - aucun secret supplémentaire pour l'état de santé : SOURCE_GITHUB_TOKEN
-#     est mappé sur le jeton ambiant du job (secrets.GITHUB_TOKEN, scopé à
-#     ce dépôt-ci grâce à `permissions: contents: write` ci-dessous) — même
-#     mécanisme que le pipeline nocturne pour l'état « déjà vu »
-#   - DIGEST_PUBLISH_TOKEN (Story 4.3, nouveau prérequis) : même secret que
-#     `pipeline-nocturne.yml` utilise déjà pour le dépôt de sortie — aucun
-#     nouveau secret à créer si ce dépôt a déjà été configuré (Story 1.8) ;
-#     réutilisé tel quel par le step de découverte (Story 4.4), aucun
-#     nouveau secret nécessaire non plus pour celui-ci
+#   - aucun secret supplémentaire, ni pour l'état de santé ni pour la
+#     publication : SOURCE_GITHUB_TOKEN et GITHUB_TOKEN sont tous deux
+#     mappés sur le même jeton ambiant du job (secrets.GITHUB_TOKEN, scopé
+#     à ce dépôt grâce à `permissions: contents: write` ci-dessous) — depuis
+#     le 2026-09-18, `Agent_Veille_Tech` sert à la fois de dépôt source et
+#     de dépôt de sortie (consolidation demandée par Abdoulaye), donc plus
+#     besoin du PAT dédié (DIGEST_PUBLISH_TOKEN) qu'un second dépôt de
+#     sortie séparé aurait exigé — ce second dépôt n'a d'ailleurs jamais
+#     été créé
 #   - ni ANTHROPIC_API_KEY (ce job n'enrichit rien) ni collecte réseau par
 #     source pour le contrôle de fraîcheur (il ne touche que l'état de
 #     santé et le récapitulatif) — le step de découverte, lui, fait de
@@ -93,11 +93,10 @@ jobs:
           SOURCE_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # État de santé : dépôt courant, jeton ambiant du job.
           # Récapitulatif des sources à surveiller (Story 4.3) : dépôt de
-          # sortie, même secret que `pipeline-nocturne.yml` — mappé sur
-          # GITHUB_TOKEN (nom attendu par publish.py, inchangé), pas le
-          # jeton ambiant que ce nom évoque d'habitude (même précaution
-          # que dans pipeline-nocturne.yml).
-          GITHUB_TOKEN: ${{ secrets.DIGEST_PUBLISH_TOKEN }}
+          # sortie — le même dépôt depuis le 2026-09-18, donc le même jeton
+          # ambiant convient ici aussi (mappé sur GITHUB_TOKEN, nom attendu
+          # par publish.py, inchangé).
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: uv run python -m veille.pipeline --controle-sante
 
       - name: Exécuter le cycle de découverte de nouvelle source
@@ -115,7 +114,7 @@ jobs:
         # aucun accès au dépôt courant nécessaire ici.
         if: always() && steps.installer-dependances.outcome == 'success'
         env:
-          # Dépôt de sortie uniquement — même secret que le step ci-dessus,
-          # aucun nouveau secret à créer.
-          GITHUB_TOKEN: ${{ secrets.DIGEST_PUBLISH_TOKEN }}
+          # Dépôt de sortie uniquement — même jeton ambiant que le step
+          # ci-dessus, aucun secret dédié à créer.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: uv run python -m veille.pipeline --decouvrir-source

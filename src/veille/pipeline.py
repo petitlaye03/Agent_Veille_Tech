@@ -348,10 +348,14 @@ def controler_fraicheur(
     jamais affecter l'autre.
 
     `publish_client` (Story 4.3) est **distinct** de `store_client` : il
-    vise le **dépôt de sortie** (digest publié, `DIGEST_PUBLISH_TOKEN`),
-    pas le dépôt source (`SOURCE_GITHUB_TOKEN`) que `store_client` vise
+    vise le **dépôt de sortie** (digest publié) via l'env var `GITHUB_TOKEN`,
+    pas le dépôt source via `SOURCE_GITHUB_TOKEN` que `store_client` vise
     déjà — même distinction que `store_conn`/`publish_client` dans
-    `executer()`.
+    `executer()`. Les deux ciblent le même dépôt GitHub depuis le
+    2026-09-18 (voir docstrings de `publish.py`/`store.py`), mais restent
+    deux paramètres et deux env vars séparés : chaque module reste
+    indépendamment testable (AD-2), et un futur retour à deux dépôts
+    distincts n'aurait rien à changer ici.
 
     Ne lève jamais (même filet de sécurité qu'`executer()`). Retourne
     `True` si le contrôle a pu s'exécuter et l'état a été retéléversé avec
@@ -451,7 +455,7 @@ def decouvrir_nouvelle_source(
     Contrairement à `controler_fraicheur()`, ne touche jamais l'état
     « déjà vu »/santé des sources (AD-5) : ce cycle ne lit ni n'écrit
     `data/deja-vu.sqlite3` — seul le dépôt de sortie (`publish_client`,
-    `DIGEST_PUBLISH_TOKEN`) est concerné, aucun jeton de dépôt source
+    env var `GITHUB_TOKEN`) est concerné, aucun jeton de dépôt source
     nécessaire ici (`SOURCE_GITHUB_TOKEN`, requis par `store.py`, hors de
     portée de cette fonction).
 

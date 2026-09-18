@@ -1,11 +1,15 @@
 """Publication du digest (AD-8, FR-9) et de son archive datée (FR-10).
 
 Écrit/actualise `index.html` (page) et `site/archive/YYYY-MM-DD.md`
-(archive, Story 1.9) dans un **second dépôt GitHub, public, dédié
-uniquement à la sortie publiée** — `Agent_Veille_Tech` (le code, les
-stories) reste privé. Décision actée avec Abdoulaye le 2026-08-28 : la
-Structural Seed de l'architecture anticipait déjà cette variante (« `site/`
-peut être un sous-module ou un repo distinct »).
+(archive, Story 1.9) dans **`Agent_Veille_Tech`, le même dépôt que le code
+et les stories**. Architecture initiale (2026-08-28) : un second dépôt
+GitHub, public, dédié uniquement à la sortie publiée — la Structural Seed
+de l'architecture anticipait cette variante (« `site/` peut être un
+sous-module ou un repo distinct »). Ce second dépôt n'a toutefois jamais
+été créé ; Abdoulaye a rendu `Agent_Veille_Tech` public le 2026-09-18 et
+demandé la consolidation en un seul dépôt (« tout sera géré à partir de
+là-bas ») plutôt que d'en ouvrir un deuxième — même cible que
+`store.SOURCE_REPO` depuis lors.
 
 Via l'API Contents de GitHub (`PUT /repos/{owner}/{repo}/contents/{path}`),
 jamais un clone local ni un appel `subprocess` à `git` — testabilité (client
@@ -39,7 +43,12 @@ logger = logging.getLogger(__name__)
 # Dépôt de sortie — constante en dur, même précédent que `MODELE` dans
 # `enrich/llm.py` : AD-3 (configuration) lie explicitement FR-1/5/6, pas la
 # cible de publication. Paramètre que seul Abdoulaye modifierait, et rarement.
-PUBLISH_REPO = "petitlaye03/agent-veille-tech-digest"
+# Même dépôt que `store.SOURCE_REPO` depuis le 2026-09-18 (dépôt unique,
+# public — voir docstring de module) : deux constantes séparées malgré tout,
+# pas une seule partagée — chaque module reste indépendamment lisible/testable
+# sans import croisé (AD-2), et une éventuelle scission future n'aurait qu'un
+# seul endroit à changer par module.
+PUBLISH_REPO = "petitlaye03/Agent_Veille_Tech"
 
 # Renommé depuis `CHEMIN_FICHIER` (Story 1.9) : il existe désormais un second
 # chemin, celui de l'archive datée (voir `publier_archive`).

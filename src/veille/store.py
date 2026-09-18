@@ -14,15 +14,19 @@ confirmés, jamais avant ni en cas d'échec partiel.
 
 **Persistance à travers les runs GitHub Actions** (Story 3.1 a choisi un
 runner éphémère, rien n'y survit d'un run à l'autre) : le fichier SQLite
-est lui-même committé dans le **dépôt source** (`Agent_Veille_Tech`, privé
-— pas le dépôt de sortie public, cet état est un détail d'implémentation
-du pipeline, pas du contenu publié) via l'API Contents de GitHub, réutilisant
-le même mécanisme d'upsert par `sha` que `publish.py`, mais avec son propre
-jeton (`SOURCE_GITHUB_TOKEN` — le jeton ambiant du workflow, scopé au
-dépôt courant, distinct de `DIGEST_PUBLISH_TOKEN` qui vise le dépôt de
-sortie). Choix délibéré plutôt qu'un service de stockage dédié : le fichier
-reste minuscule à cette échelle (identifiants d'articles, pas leur contenu),
-et ce mécanisme est déjà construit, testé, et gratuit (NFR1).
+est lui-même committé dans `Agent_Veille_Tech` via l'API Contents de
+GitHub, réutilisant le même mécanisme d'upsert par `sha` que `publish.py`,
+mais avec son propre jeton (`SOURCE_GITHUB_TOKEN` — le jeton ambiant du
+workflow, scopé au dépôt courant). Jusqu'au 2026-09-18, ce dépôt était
+privé et distinct du dépôt de sortie public visé par
+`publish.PUBLISH_REPO` (`DIGEST_PUBLISH_TOKEN`, un second jeton dédié) —
+depuis qu'Abdoulaye a rendu `Agent_Veille_Tech` public et consolidé les
+deux dépôts en un seul, `SOURCE_REPO` et `PUBLISH_REPO` visent la même
+cible, et le jeton ambiant du job suffit aux deux écritures (voir les
+en-têtes des deux workflows). Choix délibéré plutôt qu'un service de
+stockage dédié : le fichier reste minuscule à cette échelle (identifiants
+d'articles, pas leur contenu), et ce mécanisme est déjà construit, testé,
+et gratuit (NFR1).
 """
 
 import base64
@@ -42,9 +46,10 @@ logger = logging.getLogger(__name__)
 
 CHEMIN_LOCAL_DEFAUT = Path("data/deja-vu.sqlite3")
 
-# Dépôt source (privé) — distinct de `publish.PUBLISH_REPO` (dépôt de
-# sortie public) : cet état est un détail d'implémentation du pipeline,
-# jamais publié.
+# Même dépôt que `publish.PUBLISH_REPO` depuis le 2026-09-18 (voir
+# docstring de module) — deux constantes séparées malgré tout, par
+# indépendance de module (AD-2), pas parce que les cibles diffèrent
+# encore.
 #
 # `CHEMIN_DISTANT` correspond au même motif `*.sqlite3` exclu par
 # `.gitignore` (trouvé en revue) — sans contradiction : l'API Contents de
@@ -227,13 +232,13 @@ def marquer_vus(items: list[Item], conn: sqlite3.Connection) -> None:
 
 def _jeton() -> str | None:
     """`SOURCE_GITHUB_TOKEN` (`.env`, ou le jeton ambiant du workflow en
-    CI) — **distinct** de `GITHUB_TOKEN`/`publish.py` (qui vise le dépôt de
-    sortie via `DIGEST_PUBLISH_TOKEN`) : cette fonction écrit sur le dépôt
-    **source**, pas le dépôt de sortie. En local, repli sur `gh auth token`
-    (même patron que `publish._jeton_depuis_gh_cli`, dupliqué ici plutôt
-    que réutilisé — module volontairement indépendant de `publish.py`,
-    même esprit que les connecteurs qui ne partagent pas leur configuration
-    réseau, AD-2)."""
+    CI) — **distinct** en code de `GITHUB_TOKEN`/`publish.py`, même si les
+    deux visent désormais le même dépôt (voir docstring de module) : cette
+    fonction reste conceptuellement scopée au dépôt **source**. En local,
+    repli sur `gh auth token` (même patron que
+    `publish._jeton_depuis_gh_cli`, dupliqué ici plutôt que réutilisé —
+    module volontairement indépendant de `publish.py`, même esprit que les
+    connecteurs qui ne partagent pas leur configuration réseau, AD-2)."""
     global _env_charge
     if not _env_charge:
         load_dotenv()

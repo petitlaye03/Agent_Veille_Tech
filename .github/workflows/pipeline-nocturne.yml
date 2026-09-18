@@ -10,17 +10,18 @@
 # Prérequis réels avant que ce workflow puisse réussir (voir Dev Notes de
 # la story 3.1, non résolus par cette story elle-même) :
 #   - secret ANTHROPIC_API_KEY (sinon enrich/llm.py dégrade : titres en repli)
-#   - secret DIGEST_PUBLISH_TOKEN, un jeton d'accès personnel avec droit
-#     d'écriture sur le dépôt de sortie (petitlaye03/agent-veille-tech-digest)
-#     — le secrets.GITHUB_TOKEN fourni nativement par Actions est scopé au
-#     dépôt courant (Agent_Veille_Tech), pas au dépôt de sortie
-#   - le dépôt de sortie lui-même doit exister (sinon publish.py dégrade :
-#     rien n'est publié, sans planter)
-#   - aucun secret supplémentaire pour l'état « déjà vu » (Story 3.4) : le
-#     jeton ambiant du job suffit (SOURCE_GITHUB_TOKEN mappé sur
-#     secrets.GITHUB_TOKEN, scopé à ce dépôt-ci grâce à `permissions:
-#     contents: write` ci-dessous) — sans lui, store.py dégrade : l'état
-#     reste local au run, jamais synchronisé, sans planter
+#   - aucun secret dédié pour la publication ni pour l'état « déjà vu » :
+#     depuis le 2026-09-18, `Agent_Veille_Tech` est public et sert à la fois
+#     de dépôt source et de dépôt de sortie (consolidation demandée par
+#     Abdoulaye — voir docstrings de `publish.py`/`store.py`), donc le
+#     jeton ambiant du job (secrets.GITHUB_TOKEN, scopé à ce dépôt grâce à
+#     `permissions: contents: write` ci-dessous) suffit aux deux écritures.
+#     Un `DIGEST_PUBLISH_TOKEN` distinct (PAT dédié) était nécessaire tant
+#     qu'un second dépôt de sortie séparé était prévu ; ce second dépôt n'a
+#     jamais été créé, donc plus aucun secret à créer manuellement pour ce
+#     workflow — sans lui non plus, chaque étape dégrade sans planter
+#     (publish.py : rien n'est publié ; store.py : l'état reste local au
+#     run, jamais synchronisé).
 #
 # Risque connu, non contournable par la configuration de ce fichier (trouvé
 # en revue) : GitHub désactive silencieusement un déclencheur `schedule`
@@ -51,10 +52,11 @@ concurrency:
   cancel-in-progress: false
 
 # Écriture sur le dépôt courant depuis la Story 3.4 (AD-5, AD-11) : l'état
-# « déjà vu » (data/deja-vu.sqlite3) est committé dans **ce** dépôt (source,
-# privé) via le jeton ambiant du job (secrets.GITHUB_TOKEN, mappé sur
-# SOURCE_GITHUB_TOKEN ci-dessous) — distinct des écritures vers le dépôt de
-# sortie, qui restent portées par DIGEST_PUBLISH_TOKEN comme avant.
+# « déjà vu » (data/deja-vu.sqlite3) est committé dans **ce** dépôt via le
+# jeton ambiant du job (secrets.GITHUB_TOKEN, mappé sur SOURCE_GITHUB_TOKEN
+# ci-dessous). Depuis le 2026-09-18, ce même jeton ambiant suffit aussi aux
+# écritures de publication (GITHUB_TOKEN, dépôt désormais unique — voir
+# en-tête de ce fichier), plus besoin d'un jeton séparé pour celles-ci.
 permissions:
   contents: write
 
@@ -70,9 +72,9 @@ jobs:
     steps:
       # Épinglé au commit du tag v4 plutôt qu'au tag flottant lui-même
       # (trouvé en revue) : ce job manipule un jeton à droits d'écriture
-      # sur un second dépôt (DIGEST_PUBLISH_TOKEN) — un tag mutable
-      # re-pointé (compromission ou erreur en amont) s'exécuterait avec ce
-      # jeton sans qu'aucun changement n'apparaisse dans ce fichier.
+      # sur ce dépôt — un tag mutable re-pointé (compromission ou erreur
+      # en amont) s'exécuterait avec ce jeton sans qu'aucun changement
+      # n'apparaisse dans ce fichier.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Installer uv
@@ -92,18 +94,20 @@ jobs:
       - name: Exécuter le pipeline
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          # Mappé sur GITHUB_TOKEN (nom attendu par publish.py, inchangé) :
-          # le secret réservé secrets.GITHUB_TOKEN natif d'Actions ne
-          # suffirait pas, voir en-tête de ce fichier. Volontairement scopé
-          # à ce seul step (pas au job entier) : un futur step ajouté à ce
-          # job ne verra pas ce jeton à moins de le redéclarer
+          # Mappé sur GITHUB_TOKEN (nom attendu par publish.py, inchangé).
+          # Jusqu'au 2026-09-18 il fallait ici un PAT dédié
+          # (DIGEST_PUBLISH_TOKEN) scopé à un second dépôt de sortie — ce
+          # second dépôt n'a jamais été créé, et le dépôt courant est
+          # désormais public, donc le jeton ambiant natif d'Actions
+          # (secrets.GITHUB_TOKEN) suffit déjà (permissions: contents:
+          # write ci-dessus), voir en-tête de ce fichier. Volontairement
+          # scopé à ce seul step (pas au job entier) : un futur step ajouté
+          # à ce job ne verra pas ce jeton à moins de le redéclarer
           # explicitement ici, pour éviter qu'il ne soit confondu par
           # inadvertance avec le jeton ambiant que son nom évoque d'habitude.
-          GITHUB_TOKEN: ${{ secrets.DIGEST_PUBLISH_TOKEN }}
-          # État « déjà vu » (Story 3.4) : écrit sur **ce** dépôt (source),
-          # donc le jeton ambiant du job suffit (permissions: contents:
-          # write ci-dessus) — jamais DIGEST_PUBLISH_TOKEN, scopé au dépôt
-          # de sortie, sans aucun droit sur celui-ci.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # État « déjà vu » (Story 3.4) : écrit sur ce même dépôt, donc le
+          # même jeton ambiant du job convient ici aussi.
           SOURCE_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: uv run python -m veille.pipeline
 
@@ -117,5 +121,5 @@ jobs:
         # couches de revue sur ce point.
         if: failure() || cancelled()
         env:
-          GITHUB_TOKEN: ${{ secrets.DIGEST_PUBLISH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: uv run python -m veille.pipeline --bandeau-echec
