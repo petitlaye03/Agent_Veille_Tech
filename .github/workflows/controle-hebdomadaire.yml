@@ -9,6 +9,16 @@
 # récapitulatif consultable des sources à surveiller sur la page du
 # digest déjà publiée (dépôt de sortie).
 #
+# Depuis la Story 4.4 (FR-14), ce workflow porte aussi le cycle de
+# découverte hebdomadaire d'une nouvelle source (`--decouvrir-source`) —
+# un second step **indépendant** (`if: always()`) : une panne du contrôle
+# de fraîcheur ne doit jamais empêcher la tentative de découverte, ni
+# réciproquement (même principe d'isolation que le reste du projet, AD-6).
+# `executer()` (pipeline nocturne) réapplique déjà le panneau « À
+# découvrir » chaque nuit — ce step-ci ne fait que retrouver/rafraîchir la
+# proposition de la semaine avec une visibilité dédiée dans l'onglet
+# Actions, pas un mécanisme distinct.
+#
 # Prérequis réels avant que ce workflow puisse réussir :
 #   - aucun secret supplémentaire pour l'état de santé : SOURCE_GITHUB_TOKEN
 #     est mappé sur le jeton ambiant du job (secrets.GITHUB_TOKEN, scopé à
@@ -16,9 +26,15 @@
 #     mécanisme que le pipeline nocturne pour l'état « déjà vu »
 #   - DIGEST_PUBLISH_TOKEN (Story 4.3, nouveau prérequis) : même secret que
 #     `pipeline-nocturne.yml` utilise déjà pour le dépôt de sortie — aucun
-#     nouveau secret à créer si ce dépôt a déjà été configuré (Story 1.8)
+#     nouveau secret à créer si ce dépôt a déjà été configuré (Story 1.8) ;
+#     réutilisé tel quel par le step de découverte (Story 4.4), aucun
+#     nouveau secret nécessaire non plus pour celui-ci
 #   - ni ANTHROPIC_API_KEY (ce job n'enrichit rien) ni collecte réseau par
-#     source (il ne touche que l'état de santé et le récapitulatif)
+#     source pour le contrôle de fraîcheur (il ne touche que l'état de
+#     santé et le récapitulatif) — le step de découverte, lui, fait de
+#     vraies requêtes réseau vers les candidats de `config/candidats.yaml`
+#     (vérification de fraîcheur, AC2), mais jamais vers les sources du
+#     socle suivi
 #
 # Même risque connu que `pipeline-nocturne.yml`, non contourné ici non plus :
 # GitHub désactive silencieusement un déclencheur `schedule` après 60 jours
@@ -51,19 +67,25 @@ permissions:
 jobs:
   controler-la-fraicheur:
     runs-on: ubuntu-latest
-    # Ce job ne fait ni collecte réseau par source ni appel LLM — un
-    # plafond nettement plus bas que celui du pipeline nocturne suffit.
-    timeout-minutes: 10
+    # Contrôle de fraîcheur : aucune collecte réseau par source ni appel
+    # LLM. Depuis la Story 4.4 (trouvé en revue, commentaire devenu
+    # obsolète corrigé), le step de découverte fait de vraies requêtes
+    # réseau vers `config/candidats.yaml` — plafond relevé en conséquence
+    # (10 → 15 min), toujours nettement en dessous du pipeline nocturne.
+    timeout-minutes: 15
     steps:
       # Même raison qu'en Story 3.1 (trouvé en revue) : ce job manipule un
       # jeton à droits d'écriture sur ce dépôt — épinglé par SHA de commit,
       # pas par tag flottant.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - id: checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Installer uv
+      - id: installer-uv
+        name: Installer uv
         uses: astral-sh/setup-uv@e4db8464a088ece1b920f60402e813ea4de65b8f # v4
 
-      - name: Installer les dépendances
+      - id: installer-dependances
+        name: Installer les dépendances
         run: uv sync --locked
 
       - name: Exécuter le contrôle de fraîcheur
@@ -77,3 +99,23 @@ jobs:
           # que dans pipeline-nocturne.yml).
           GITHUB_TOKEN: ${{ secrets.DIGEST_PUBLISH_TOKEN }}
         run: uv run python -m veille.pipeline --controle-sante
+
+      - name: Exécuter le cycle de découverte de nouvelle source
+        # `if: always()` (Story 4.4) affranchit ce step du résultat du
+        # précédent ("Exécuter le contrôle de fraîcheur") — une panne du
+        # contrôle de fraîcheur ne doit jamais empêcher la tentative de
+        # découverte hebdomadaire, ni réciproquement (AD-6). Mais
+        # `always()` seul court-circuiterait *tout* garde-fou par défaut,
+        # y compris celui qui saute normalement ce step si le dépôt n'a
+        # même pas pu être cloné ou les dépendances installées (trouvé en
+        # revue, Edge Case Hunter) — d'où la condition explicite sur
+        # l'issue du step d'installation des dépendances, qui dépend
+        # transitivement du checkout. N'utilise jamais SOURCE_GITHUB_TOKEN :
+        # ce cycle ne touche jamais l'état « déjà vu »/santé (SQLite), donc
+        # aucun accès au dépôt courant nécessaire ici.
+        if: always() && steps.installer-dependances.outcome == 'success'
+        env:
+          # Dépôt de sortie uniquement — même secret que le step ci-dessus,
+          # aucun nouveau secret à créer.
+          GITHUB_TOKEN: ${{ secrets.DIGEST_PUBLISH_TOKEN }}
+        run: uv run python -m veille.pipeline --decouvrir-source

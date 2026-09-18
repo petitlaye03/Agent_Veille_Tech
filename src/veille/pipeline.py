@@ -16,10 +16,16 @@ from pathlib import Path
 
 import httpx
 
-from veille import collect, health, store
+from veille import collect, discover, health, store
 from veille.enrich.llm import enrichir, marquer_recommandation
 from veille.filter import CHAMPS_QUOTAS, charger_ponderations
-from veille.publish import publier, publier_archive, publier_bandeau_echec, publier_recapitulatif_sante
+from veille.publish import (
+    publier,
+    publier_a_decouvrir,
+    publier_archive,
+    publier_bandeau_echec,
+    publier_recapitulatif_sante,
+)
 from veille.render import rendre, rendre_bandeau_echec, rendre_markdown
 
 logger = logging.getLogger(__name__)
@@ -34,6 +40,7 @@ def executer(
     publish_client: httpx.Client | None = None,
     deja_vus_path: str | Path | None = None,
     store_client: httpx.Client | None = None,
+    candidats_path: str | Path | None = None,
 ) -> bool:
     """Exécute le pipeline complet, un seul run.
 
@@ -82,6 +89,9 @@ def executer(
     d'injection que les autres chemins/clients : `None` par défaut
     (chemin/jeton réels), substituables par les tests pour ne jamais
     toucher le vrai `data/deja-vu.sqlite3` du dépôt ni le réseau.
+    `candidats_path` (Story 4.4) suit la même convention : passé tel quel
+    à `discover.proposer_source` lors de la réapplication du panneau « À
+    découvrir » (voir plus bas), jamais résolu ici lui-même.
 
     Ne lève jamais : `collecter`, `enrichir`, `marquer_recommandation`,
     `publier`, `publier_archive` et les fonctions de synchronisation de
@@ -177,6 +187,39 @@ def executer(
                         "sources à surveiller après la collecte nocturne — "
                         "le digest reste publié normalement."
                     )
+
+            # Réapplication du panneau « À découvrir » (Story 4.4) — même
+            # correctif que ci-dessus pour le récapitulatif de santé, mais
+            # construit dès l'implémentation cette fois plutôt que trouvé en
+            # revue : `rendre()` vient de régénérer la page depuis zéro,
+            # ignorant tout des marqueurs du panneau « À découvrir » ; sans
+            # cette réapplication, la publication nocturne normale
+            # l'effacerait silencieusement dès la nuit suivante. Contrairement
+            # au bloc ci-dessus, **indépendant de `store_conn`** : ce cycle ne
+            # touche jamais l'état « déjà vu »/santé (SQLite), seulement
+            # `sources.yaml`/`config/candidats.yaml` — toujours tentée, y
+            # compris quand `store_conn` est `None` (état local indisponible
+            # cette nuit). `discover.proposer_source` est déterministe par
+            # semaine ISO (`aujourdhui.isocalendar().week`) : rejouée chaque
+            # nuit de la même semaine, elle reproduit le même candidat tant
+            # qu'il reste vérifié actif — la réapplication nocturne ne fait
+            # donc jamais que corroborer/rafraîchir la proposition en cours,
+            # jamais dévier du rythme hebdomadaire voulu par l'AC1.
+            try:
+                candidat = discover.proposer_source(
+                    candidats_path=candidats_path, sources_path=sources_path_resolu
+                )
+                if publier_a_decouvrir(candidat, client=publish_client) is False:
+                    logger.warning(
+                        "Republication du panneau « À découvrir » en échec "
+                        "après la collecte nocturne."
+                    )
+            except Exception:  # noqa: BLE001 — voir commentaire ci-dessus
+                logger.exception(
+                    "Échec de la republication du panneau « À découvrir » "
+                    "après la collecte nocturne — le digest reste publié "
+                    "normalement."
+                )
 
             if page_ok and archive_ok and store_conn is not None:
                 # Isolé de son propre `try` (trouvé en revue) : la publication
@@ -390,10 +433,64 @@ def main_controle_sante() -> None:
     sys.exit(0 if reussite else 1)
 
 
+def decouvrir_nouvelle_source(
+    candidats_path: str | Path | None = None,
+    sources_path: str | Path | None = None,
+    publish_client: httpx.Client | None = None,
+) -> bool:
+    """Cycle de découverte hebdomadaire (FR-14, Story 4.4) : propose une
+    source candidate vérifiée active (`discover.proposer_source`), publie
+    (ou retire, si aucun candidat vivant) le panneau « À découvrir » sur
+    la page déjà publiée.
+
+    Point d'entrée distinct d'`executer()`/`controler_fraicheur()` (voir
+    `main_decouverte_source`, invoqué par un step indépendant du même
+    workflow `controle-hebdomadaire.yml`, `if: always()` — une panne de
+    l'un ne doit jamais empêcher la tentative de l'autre, ni réciproquement).
+
+    Contrairement à `controler_fraicheur()`, ne touche jamais l'état
+    « déjà vu »/santé des sources (AD-5) : ce cycle ne lit ni n'écrit
+    `data/deja-vu.sqlite3` — seul le dépôt de sortie (`publish_client`,
+    `DIGEST_PUBLISH_TOKEN`) est concerné, aucun jeton de dépôt source
+    nécessaire ici (`SOURCE_GITHUB_TOKEN`, requis par `store.py`, hors de
+    portée de cette fonction).
+
+    Ne lève jamais (même filet de sécurité qu'`executer()`/
+    `controler_fraicheur()`). Retourne `True` si la publication (insertion,
+    remplacement ou retrait du panneau) a réussi ou n'avait rien à faire
+    (`None` de `publier_a_decouvrir` — aucune page déjà publiée à annoter,
+    ou rien à retirer ; pas une panne, même discipline que
+    `main_bandeau_echec`). Retourne `False` seulement sur une vraie panne
+    de publication.
+    """
+    try:
+        candidat = discover.proposer_source(candidats_path=candidats_path, sources_path=sources_path)
+        resultat = publier_a_decouvrir(candidat, client=publish_client)
+        if resultat is False:
+            logger.warning("Publication du panneau « À découvrir » en échec.")
+            return False
+        return True
+    except Exception:  # noqa: BLE001 — filet de sécurité de dernier recours
+        logger.exception("Échec inattendu du cycle de découverte de nouvelle source.")
+        return False
+
+
+def main_decouverte_source() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
+    reussite = decouvrir_nouvelle_source()
+    if not reussite:
+        logger.warning("Cycle de découverte de nouvelle source en échec.")
+    sys.exit(0 if reussite else 1)
+
+
 if __name__ == "__main__":
     if "--bandeau-echec" in sys.argv[1:]:
         main_bandeau_echec()
     elif "--controle-sante" in sys.argv[1:]:
         main_controle_sante()
+    elif "--decouvrir-source" in sys.argv[1:]:
+        main_decouverte_source()
     else:
         main()

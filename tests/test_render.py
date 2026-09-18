@@ -424,3 +424,74 @@ def test_rendre_recapitulatif_sante_n_est_pas_un_document_complet():
 
     assert "<!doctype html>" not in fragment.lower()
     assert "<body" not in fragment
+
+
+def test_rendre_recapitulatif_sante_liste_vide_leve():
+    """« jamais un panneau vide » (AC4) — imposé ici, pas seulement laissé
+    à la discipline du seul appelant existant."""
+    import pytest
+
+    from veille.render import rendre_recapitulatif_sante
+
+    with pytest.raises(ValueError):
+        rendre_recapitulatif_sante([])
+
+
+# --- À découvrir (Story 4.4) -----------------------------------------------
+
+
+def _candidat(id_="candidat-x", url="https://exemple.test/feed", justification="Une bonne raison."):
+    from veille.config import SourceConfig
+    from veille.discover import CandidatSource
+
+    source = SourceConfig(id=id_, type="rss", url=url, langue="en", registre="apprendre")
+    return CandidatSource(source=source, justification=justification)
+
+
+def test_rendre_a_decouvrir_contient_les_marqueurs_id_justification_et_lien():
+    from veille.render import A_DECOUVRIR_DEBUT, A_DECOUVRIR_FIN, rendre_a_decouvrir
+
+    fragment = rendre_a_decouvrir(_candidat(id_="ma-source", url="https://exemple.test/flux", justification="Une raison précise."))
+
+    assert fragment.startswith(A_DECOUVRIR_DEBUT)
+    assert fragment.endswith(A_DECOUVRIR_FIN)
+    assert "ma-source" in fragment
+    assert "Une raison précise." in fragment
+    assert 'href="https://exemple.test/flux"' in fragment
+
+
+def test_rendre_a_decouvrir_echappe_le_contenu():
+    from veille.render import rendre_a_decouvrir
+
+    fragment = rendre_a_decouvrir(_candidat(justification="<script>alert(1)</script>"))
+
+    assert "<script>" not in fragment
+    assert "&lt;script&gt;" in fragment
+
+
+def test_rendre_a_decouvrir_url_non_http_ne_produit_aucun_lien():
+    from veille.render import rendre_a_decouvrir
+
+    fragment = rendre_a_decouvrir(_candidat(url="javascript:alert(1)"))
+
+    assert "<a href" not in fragment
+
+
+def test_rendre_a_decouvrir_n_est_pas_un_document_complet():
+    from veille.render import rendre_a_decouvrir
+
+    fragment = rendre_a_decouvrir(_candidat())
+
+    assert "<!doctype html>" not in fragment.lower()
+    assert "<body" not in fragment
+
+
+def test_rendre_a_decouvrir_candidat_manquant_leve():
+    """Même discipline que `rendre_recapitulatif_sante([])` : le contrat
+    « jamais de panneau vide » est imposé ici, pas seulement documenté."""
+    import pytest
+
+    from veille.render import rendre_a_decouvrir
+
+    with pytest.raises(ValueError):
+        rendre_a_decouvrir(None)

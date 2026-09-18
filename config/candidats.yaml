@@ -1,0 +1,126 @@
+# Pool de sources candidates pour la découverte hebdomadaire (FR-14, Story 4.4).
+#
+# Chaque entrée a été vérifiée par requête HTTP réelle pendant la cartographie
+# du brief (voir `_bmad-output/planning-artifacts/briefs/.../addendum.md`,
+# ~280 sources testées les 20 et 23-24 juillet 2026) — jamais reprise d'une
+# documentation sans test, jamais générée. `discover.py` revérifie chaque
+# candidat en direct (flux valide, publication récente) au moment même de la
+# proposition : une URL vivante en juillet 2026 peut être morte aujourd'hui.
+#
+# Structure par entrée :
+#   justification — une phrase, écrite ici à la main, résumant l'apport de la
+#                   source (pas générée par un LLM — AD-7 réserve ce point
+#                   d'entrée à enrich/llm.py, hors périmètre de FR-14).
+#   source        — mêmes champs qu'une entrée de sources.yaml (id/type/url/
+#                   langue/registre), exploitable tel quel par les
+#                   connecteurs existants (AD-2), sans aucune modification de
+#                   config.py/SourceConfig.
+#
+# Un candidat adopté (ajouté à sources.yaml) est automatiquement exclu des
+# propositions futures par discover.proposer_source() (même id) — retirer
+# l'entrée ici reste un geste manuel optionnel, pas nécessaire.
+
+candidats:
+  # --- Apprendre -------------------------------------------------------
+  - justification: >-
+      Analyses de fond très citées sur le RL/post-training des LLM, par une
+      chercheuse d'Allen AI — angle rarement couvert par le socle actuel.
+    source:
+      id: interconnects-blog
+      type: rss
+      url: https://www.interconnects.ai/feed
+      langue: en
+      registre: apprendre
+
+  - justification: >-
+      Évaluations de LLM et fine-tuning expliqués par un praticien reconnu
+      (ex-GitHub, ex-Airbnb) — complète le blog Hugging Face déjà suivi avec
+      un regard plus orienté production.
+    source:
+      id: hamel-dev
+      type: rss
+      url: https://hamel.dev/index.xml
+      langue: en
+      registre: apprendre
+
+  - justification: >-
+      Billets de référence sur les mécanismes internes des LLM (Lilian
+      Weng, ex-OpenAI) — rythme lent mais contenu qui fait date.
+    source:
+      id: lilianweng-blog
+      type: rss
+      url: https://lilianweng.github.io/index.xml
+      langue: en
+      registre: apprendre
+
+  - justification: >-
+      Vulgarisation IA en français par un ingénieur, angle pédagogique
+      absent du socle actuel qui ne couvre l'IA qu'en anglais côté blogs.
+    source:
+      id: defend-intelligence-youtube
+      type: rss
+      url: https://www.youtube.com/feeds/videos.xml?channel_id=UCnEHCrot2HkySxMTmDPhZyg
+      langue: fr
+      registre: apprendre
+
+  - justification: >-
+      Design logiciel Python filmé, format vidéo complémentaire aux flux
+      texte déjà suivis pour la montée en compétence.
+    source:
+      id: arjancodes-youtube
+      type: rss
+      url: https://www.youtube.com/feeds/videos.xml?channel_id=UCVhQ2NnY5Rskt6UjCUkJ_DA
+      langue: en
+      registre: apprendre
+
+  # --- Ce qui bouge ------------------------------------------------------
+  - justification: >-
+      Annonces officielles de Google DeepMind — laboratoire de premier plan
+      absent du socle actuel (seuls OpenAI et Anthropic y sont couverts).
+    source:
+      id: deepmind-blog
+      type: rss
+      url: https://deepmind.google/blog/rss.xml
+      langue: en
+      registre: ce_qui_bouge
+
+  - justification: >-
+      Billets d'ingénierie de plateforme à grande échelle (GitHub même) —
+      angle « comment c'est construit » distinct de l'actualité produit.
+    source:
+      id: github-engineering-blog
+      type: rss
+      url: https://github.blog/engineering/feed/
+      langue: en
+      registre: ce_qui_bouge
+
+  - justification: >-
+      Analyses de fond sur l'IA par une revue scientifique grand public
+      (MIT) — contrepoint moins « hype » que les sources d'actualité pure.
+    source:
+      id: mit-tech-review-ai
+      type: rss
+      url: https://www.technologyreview.com/topic/artificial-intelligence/feed
+      langue: en
+      registre: ce_qui_bouge
+
+  # --- Pour le métier ------------------------------------------------------
+  - justification: >-
+      Newsletter hebdomadaire spécialisée data engineering — renforce un
+      registre encore porté par une seule source (Décideo).
+    source:
+      id: data-engineering-weekly
+      type: rss
+      url: https://www.dataengineeringweekly.com/feed
+      langue: en
+      registre: pour_le_metier
+
+  - justification: >-
+      Billets techniques de l'éditeur de dbt, outil central de la stack data
+      moderne — angle outillage concret plutôt qu'actualité générale.
+    source:
+      id: dbt-blog
+      type: rss
+      url: https://www.getdbt.com/blog/rss.xml
+      langue: en
+      registre: pour_le_metier

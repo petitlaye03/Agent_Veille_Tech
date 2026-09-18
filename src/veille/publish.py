@@ -24,10 +24,13 @@ import httpx
 from dotenv import load_dotenv
 
 from veille.render import (
+    A_DECOUVRIR_DEBUT,
+    A_DECOUVRIR_FIN,
     BANDEAU_ECHEC_DEBUT,
     BANDEAU_ECHEC_FIN,
     RECAPITULATIF_SANTE_DEBUT,
     RECAPITULATIF_SANTE_FIN,
+    rendre_a_decouvrir,
     rendre_recapitulatif_sante,
 )
 
@@ -284,6 +287,9 @@ _MOTIF_BANDEAU_ECHEC = re.compile(
 _MOTIF_RECAPITULATIF_SANTE = re.compile(
     re.escape(RECAPITULATIF_SANTE_DEBUT) + r".*?" + re.escape(RECAPITULATIF_SANTE_FIN), re.DOTALL
 )
+_MOTIF_A_DECOUVRIR = re.compile(
+    re.escape(A_DECOUVRIR_DEBUT) + r".*?" + re.escape(A_DECOUVRIR_FIN), re.DOTALL
+)
 _MOTIF_BALISE_BODY = re.compile(r"<body[^>]*>", re.IGNORECASE)
 
 
@@ -399,6 +405,90 @@ def publier_recapitulatif_sante(
         return False
     except Exception:  # noqa: BLE001 — isolation totale, même hors httpx.HTTPError
         _avertir_echec_publication("du récapitulatif de santé", categorie="recapitulatif")
+        return False
+    finally:
+        if not fourni:
+            resolu.close()
+
+
+def publier_a_decouvrir(candidat, client: httpx.Client | None = None) -> bool | None:
+    """Insère, remplace ou retire le panneau « À découvrir » sur la page
+    déjà publiée (Story 4.4, AC1/AC3/AC4).
+
+    `candidat` : `discover.CandidatSource | None` — non typé explicitement
+    ici pour la même raison que `render.rendre_a_decouvrir` (dont la
+    signature reprend le même choix) : ne pas faire dépendre `publish.py`
+    de `discover.py`, aucun import inter-module de ce sens ailleurs dans
+    le projet.
+
+    Même patron à trois états que `publier_recapitulatif_sante` (Story
+    4.3) : lit le HTML déjà publié, patche entre marqueurs stables
+    (`_inserer_fragment`), republie via le même mécanisme d'upsert par
+    `sha`. Isolation totale : ne lève jamais.
+
+    `candidat=None` signifie : aucun candidat vivant cette semaine (pool
+    entièrement mort, ou aucun candidat non déjà adopté — voir
+    `discover.proposer_source`) — le panneau existant, s'il y en a un, est
+    **retiré** (AC4 : un panneau périmé proposant une source déjà morte
+    serait trompeur) ; s'il n'y en avait pas déjà un, rien à faire
+    (dégrade en `None`, pas un `True` qui prétendrait avoir changé
+    quelque chose).
+
+    Retour à trois états (même discipline que `publier_recapitulatif_sante`) :
+    - `None` — rien à changer (aucune page déjà publiée à patcher, ou
+      `candidat=None` et aucun panneau existant à retirer) ;
+    - `False` — panne réelle (réseau, HTTP, contenu illisible) ;
+    - `True` — panneau publié, remplacé, ou retiré avec succès.
+    """
+    fourni = client is not None
+    resolu = client if fourni else _client()
+    if resolu is None:
+        return False
+
+    try:
+        charge = _charge_existante(resolu, CHEMIN_PAGE)
+        if charge is None:
+            logger.info(
+                "Aucune page déjà publiée à annoter d'un panneau « À "
+                "découvrir » — rien à faire (probablement la toute "
+                "première nuit)."
+            )
+            return None
+        if not charge.get("content"):
+            raise ValueError("réponse GET sans champ 'content' exploitable")
+        html_existant = base64.b64decode(charge["content"]).decode("utf-8")
+
+        if candidat is not None:
+            fragment = rendre_a_decouvrir(candidat)
+            html_nouveau = _inserer_fragment(html_existant, _MOTIF_A_DECOUVRIR, fragment)
+            message = "Mise à jour du panneau « À découvrir »"
+        else:
+            if not _MOTIF_A_DECOUVRIR.search(html_existant):
+                logger.info(
+                    "Aucun candidat vivant cette semaine et aucun panneau "
+                    "« À découvrir » déjà publié — rien à faire."
+                )
+                return None
+            # Retrait pur et simple (AC4) : les marqueurs et tout leur
+            # contenu disparaissent, pas de fragment vide laissé en place.
+            html_nouveau = _MOTIF_A_DECOUVRIR.sub("", html_existant)
+            message = "Retrait du panneau « À découvrir » (aucun candidat vivant)"
+
+        corps = {
+            "message": message,
+            "content": base64.b64encode(html_nouveau.encode("utf-8")).decode("ascii"),
+        }
+        if charge.get("sha"):  # même garde que `_publier` — jamais `"sha": null`
+            corps["sha"] = charge["sha"]
+
+        reponse_put = resolu.put(f"/repos/{PUBLISH_REPO}/contents/{CHEMIN_PAGE}", json=corps)
+        reponse_put.raise_for_status()
+        return True
+    except httpx.HTTPError:
+        _avertir_echec_publication("du panneau « À découvrir »", categorie="a_decouvrir")
+        return False
+    except Exception:  # noqa: BLE001 — isolation totale, même hors httpx.HTTPError
+        _avertir_echec_publication("du panneau « À découvrir »", categorie="a_decouvrir")
         return False
     finally:
         if not fourni:

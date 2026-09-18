@@ -336,3 +336,66 @@ def rendre_recapitulatif_sante(sources: list) -> str:
         "</div>\n"
         f"{RECAPITULATIF_SANTE_FIN}"
     )
+
+
+# Marqueurs stables délimitant le panneau « À découvrir » dans le HTML publié
+# (Story 4.4, FR-14) — même principe que le bandeau d'échec et le
+# récapitulatif de santé : `publish.publier_a_decouvrir` les utilise pour
+# remplacer le panneau plutôt que de l'empiler d'une semaine à l'autre, ou
+# pour le retirer si aucun candidat n'est vivant cette semaine-là.
+A_DECOUVRIR_DEBUT = "<!-- A-DECOUVRIR:DEBUT -->"
+A_DECOUVRIR_FIN = "<!-- A-DECOUVRIR:FIN -->"
+
+
+def rendre_a_decouvrir(candidat) -> str:
+    """Fragment HTML proposant une source candidate vérifiée active cette
+    semaine (Story 4.4, FR-14) — destiné à être inséré/remplacé après coup
+    dans le HTML déjà publié par `publish.publier_a_decouvrir`, jamais
+    rendu ni publié seul (même patron que `rendre_bandeau_echec`/
+    `rendre_recapitulatif_sante`).
+
+    `candidat` : `discover.CandidatSource` — non typé explicitement ici
+    pour ne pas faire dépendre `render.py` de `discover.py` (même raison
+    que `rendre_recapitulatif_sante` vis-à-vis de `health.py`) ; seuls
+    `candidat.justification`, `candidat.source.id` et `candidat.source.url`
+    sont utilisés.
+
+    N'est **jamais** appelée avec `candidat=None` (décision de l'appelant,
+    `publish.publier_a_decouvrir` : `None` signifie retirer le panneau
+    existant, pas publier un panneau vide) — **imposé** ici, pas seulement
+    documenté (même discipline que `rendre_recapitulatif_sante`, trouvée en
+    revue de la Story 4.3).
+
+    `justification`/`source.id` échappés via `html.escape` (source de
+    configuration, `config/candidats.yaml`, pas une source externe — mais
+    coût nul à échapper systématiquement, même choix que pour
+    `rendre_recapitulatif_sante`). `source.url` passe par `_url_surs` (même
+    garde-fou que le reste de ce module, schéma http(s) uniquement, mêmes
+    précautions AC8/AC13 que pour les entrées du digest) : une URL
+    invalide dégrade en texte seul, jamais de lien cliquable.
+    """
+    if candidat is None:
+        raise ValueError(
+            "rendre_a_decouvrir() ne doit jamais être appelée avec un "
+            "candidat manquant — l'appelant doit retirer le panneau "
+            "existant plutôt que d'en publier un vide (voir "
+            "publish.publier_a_decouvrir)."
+        )
+    url_source = candidat.source.url or ""
+    url_sure = _url_surs(url_source)
+    lien_html = (
+        f'<a href="{html.escape(url_sure)}">{html.escape(url_source)}</a>'
+        if url_sure
+        else html.escape(url_source)
+    )
+    return (
+        f"{A_DECOUVRIR_DEBUT}\n"
+        '<div style="background:var(--a-decouvrir-bg);'
+        "color:var(--a-decouvrir-fg);padding:0.75rem 1rem;"
+        'border-radius:8px;margin:0 0 1rem;font-size:0.95rem;">\n'
+        f"🔭 À découvrir cette semaine : <strong>{html.escape(candidat.source.id)}</strong>\n"
+        f'<p style="margin:0.5rem 0 0;">{html.escape(candidat.justification)}</p>\n'
+        f'<p style="margin:0.5rem 0 0;">{lien_html}</p>\n'
+        "</div>\n"
+        f"{A_DECOUVRIR_FIN}"
+    )

@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from veille import pipeline, publish, store
+from veille import discover, pipeline, publish, store
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
@@ -30,10 +30,25 @@ def _isoler_le_stockage_deja_vu(tmp_path, monkeypatch):
     `publish_client=None` par défaut — sans cette neutralisation, chaque
     test de `controler_fraicheur()` sans client explicite aurait résolu un
     vrai jeton (`gh auth token`) et fait un vrai appel réseau en lecture
-    vers l'API GitHub du dépôt de sortie."""
+    vers l'API GitHub du dépôt de sortie.
+
+    `discover.CONNECTORS` neutralisé aussi (trouvé en implémentation de la
+    Story 4.4) : `executer()` réapplique désormais le panneau « À
+    découvrir » à chaque run via `discover.proposer_source()`, qui, sans
+    `candidats_path` explicite, résout le **vrai** `config/candidats.yaml`
+    du dépôt — chaque test de `executer()` qui ne s'intéresse pas
+    spécifiquement à cette réapplication aurait donc réellement vérifié
+    (requêtes HTTP réelles vers interconnects.ai, hamel.dev, etc.) les
+    candidats du pool réel. Un `CONNECTORS` vide fait échouer
+    `verifier_candidat` pour tout candidat (type toujours inconnu), donc
+    `proposer_source` dégrade en `None` — même comportement que si aucun
+    candidat n'était vivant, sans aucun appel réseau. Les tests qui
+    exercent spécifiquement la découverte remplacent ce qu'il faut par un
+    connecteur simulé, par-dessus cette isolation par défaut."""
     monkeypatch.setattr(store, "CHEMIN_LOCAL_DEFAUT", tmp_path / "deja-vu.sqlite3")
     monkeypatch.setattr(store, "_jeton", lambda: None)
     monkeypatch.setattr(publish, "_jeton", lambda: None)
+    monkeypatch.setattr(discover, "CONNECTORS", {})
 
 
 def _sources_yaml(tmp_path):
@@ -1125,3 +1140,191 @@ def test_controler_fraicheur_retire_le_recapitulatif_si_plus_rien_a_surveiller(t
     assert "RECAPITULATIF-SANTE" not in html_publie
     assert "ancien souci" not in html_publie
     assert "<h1>Digest</h1>" in html_publie
+
+
+# --- Découverte de nouvelle source (Story 4.4) ------------------------------
+
+
+def _candidats_yaml(tmp_path, candidat_id="candidat-x"):
+    chemin = tmp_path / "candidats.yaml"
+    chemin.write_text(
+        textwrap.dedent(
+            f"""
+            candidats:
+              - justification: "Une bonne raison."
+                source:
+                  id: {candidat_id}
+                  type: rss
+                  url: https://exemple.test/{candidat_id}
+                  langue: en
+                  registre: apprendre
+            """
+        ),
+        encoding="utf-8",
+    )
+    return chemin
+
+
+def _item_candidat_recent():
+    from veille.models import Item
+
+    return Item(
+        source_id="candidat-x",
+        guid="g",
+        titre="T",
+        date_publication=datetime.now(timezone.utc),
+        langue="en",
+        registre="apprendre",
+        url="https://exemple.test/a",
+        contenu_brut="",
+    )
+
+
+def test_decouvrir_nouvelle_source_publie_la_proposition_verifiee(tmp_path, monkeypatch):
+    from veille import discover
+
+    candidats_yaml = _candidats_yaml(tmp_path)
+    sources_yaml = _sources_yaml(tmp_path)
+    monkeypatch.setattr(discover, "CONNECTORS", {"rss": lambda source_config: [_item_candidat_recent()]})
+    client_digest = _ClientDigestPublie("<html><body>\n<h1>Digest</h1>\n</body></html>")
+
+    reussite = pipeline.decouvrir_nouvelle_source(
+        candidats_path=candidats_yaml, sources_path=sources_yaml, publish_client=client_digest
+    )
+
+    assert reussite is True
+    assert len(client_digest.put_calls) == 1
+    import base64
+
+    html_publie = base64.b64decode(client_digest.put_calls[0][1]["content"]).decode("utf-8")
+    assert "A-DECOUVRIR" in html_publie
+    assert "candidat-x" in html_publie
+
+
+def test_decouvrir_nouvelle_source_sans_candidat_vivant_retire_le_panneau(tmp_path, monkeypatch):
+    from veille import discover
+
+    candidats_yaml = _candidats_yaml(tmp_path)
+    sources_yaml = _sources_yaml(tmp_path)
+    # Aucun connecteur RSS reconnu → le seul candidat du pool échoue sa vérification.
+    monkeypatch.setattr(discover, "CONNECTORS", {})
+    html_avec_panneau = (
+        "<html><body>\n"
+        "<!-- A-DECOUVRIR:DEBUT -->ancien candidat<!-- A-DECOUVRIR:FIN -->\n"
+        "<h1>Digest</h1>\n</body></html>"
+    )
+    client_digest = _ClientDigestPublie(html_avec_panneau)
+
+    reussite = pipeline.decouvrir_nouvelle_source(
+        candidats_path=candidats_yaml, sources_path=sources_yaml, publish_client=client_digest
+    )
+
+    assert reussite is True
+    import base64
+
+    html_publie = base64.b64decode(client_digest.put_calls[0][1]["content"]).decode("utf-8")
+    assert "A-DECOUVRIR" not in html_publie
+    assert "ancien candidat" not in html_publie
+    assert "<h1>Digest</h1>" in html_publie
+
+
+def test_decouvrir_nouvelle_source_n_echoue_pas_si_la_publication_echoue(tmp_path, monkeypatch):
+    from veille import discover
+
+    candidats_yaml = _candidats_yaml(tmp_path)
+    sources_yaml = _sources_yaml(tmp_path)
+    monkeypatch.setattr(discover, "CONNECTORS", {"rss": lambda source_config: [_item_candidat_recent()]})
+
+    def _publier_a_decouvrir_qui_leve(*args, **kwargs):
+        raise RuntimeError("panne simulée")
+
+    monkeypatch.setattr(pipeline, "publier_a_decouvrir", _publier_a_decouvrir_qui_leve)
+
+    reussite = pipeline.decouvrir_nouvelle_source(candidats_path=candidats_yaml, sources_path=sources_yaml)
+
+    assert reussite is False
+
+
+def test_decouvrir_nouvelle_source_retourne_faux_si_la_publication_renvoie_faux(tmp_path, monkeypatch):
+    from veille import discover
+
+    candidats_yaml = _candidats_yaml(tmp_path)
+    sources_yaml = _sources_yaml(tmp_path)
+    monkeypatch.setattr(discover, "CONNECTORS", {"rss": lambda source_config: [_item_candidat_recent()]})
+    monkeypatch.setattr(pipeline, "publier_a_decouvrir", lambda *args, **kwargs: False)
+
+    reussite = pipeline.decouvrir_nouvelle_source(candidats_path=candidats_yaml, sources_path=sources_yaml)
+
+    assert reussite is False
+
+
+def test_main_decouverte_source_sort_avec_le_code_zero_si_reussi(monkeypatch):
+    monkeypatch.setattr(pipeline, "decouvrir_nouvelle_source", lambda **kwargs: True)
+
+    with pytest.raises(SystemExit) as exc_info:
+        pipeline.main_decouverte_source()
+
+    assert exc_info.value.code == 0
+
+
+def test_main_decouverte_source_sort_avec_un_code_non_nul_si_echoue(monkeypatch):
+    monkeypatch.setattr(pipeline, "decouvrir_nouvelle_source", lambda **kwargs: False)
+
+    with pytest.raises(SystemExit) as exc_info:
+        pipeline.main_decouverte_source()
+
+    assert exc_info.value.code == 1
+
+
+def test_executer_reapplique_le_panneau_a_decouvrir_apres_avoir_republie_la_page(tmp_path, monkeypatch):
+    """Même correctif que pour le récapitulatif de santé (Story 4.3),
+    construit dès l'implémentation cette fois : `rendre()` régénère
+    `index.html` sans rien savoir des marqueurs du panneau « À découvrir »
+    — sans réapplication, la publication nocturne normale l'effacerait
+    silencieusement dès la nuit suivante."""
+    from veille import discover
+
+    candidats_yaml = _candidats_yaml(tmp_path)
+    sources_yaml = _sources_yaml(tmp_path)
+    monkeypatch.setattr(discover, "CONNECTORS", {"rss": lambda source_config: [_item_candidat_recent()]})
+
+    client_publication = _ClientPublicationAvecEtat()
+
+    reussite = pipeline.executer(
+        sources_path=sources_yaml,
+        candidats_path=candidats_yaml,
+        llm_client=_ClientLLMSimule(),
+        publish_client=client_publication,
+        deja_vus_path=tmp_path / "deja-vu.sqlite3",
+        store_client=_ClientStoreSimule(),
+    )
+
+    import base64
+
+    assert reussite is True
+    html_final = base64.b64decode(client_publication._fichiers["index.html"]["content"]).decode("utf-8")
+    assert "A-DECOUVRIR" in html_final
+    assert "candidat-x" in html_final
+
+
+def test_executer_ne_devient_pas_un_echec_si_la_reapplication_a_decouvrir_leve(tmp_path, monkeypatch):
+    """Isolation dédiée : une panne de cette étape annexe ne doit jamais
+    changer ce que retourne `executer()`, gouverné uniquement par
+    `page_ok and archive_ok` (même discipline que pour le récapitulatif de
+    santé)."""
+    sources_yaml = _sources_yaml(tmp_path)
+
+    def _proposer_source_qui_leve(*args, **kwargs):
+        raise RuntimeError("panne simulée")
+
+    monkeypatch.setattr(pipeline.discover, "proposer_source", _proposer_source_qui_leve)
+
+    reussite = pipeline.executer(
+        sources_path=sources_yaml,
+        llm_client=_ClientLLMSimule(),
+        publish_client=_ClientPublicationSimule(),
+        deja_vus_path=tmp_path / "deja-vu.sqlite3",
+        store_client=_ClientStoreSimule(),
+    )
+
+    assert reussite is True

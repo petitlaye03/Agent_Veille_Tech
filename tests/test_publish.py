@@ -515,3 +515,119 @@ def test_recapitulatif_bout_en_bout_avec_le_vrai_fragment_rendu():
     corps_publie = base64.b64decode(client.put_calls[0][1]["content"]).decode("utf-8")
     assert "flux-x" in corps_publie
     assert "<h1>Digest</h1>" in corps_publie
+
+
+# --- Panneau « À découvrir » (Story 4.4) -----------------------------------
+
+
+def _candidat(id_="candidat-x", url="https://exemple.test/feed", justification="Une bonne raison."):
+    from veille.config import SourceConfig
+    from veille.discover import CandidatSource
+
+    source = SourceConfig(id=id_, type="rss", url=url, langue="en", registre="apprendre")
+    return CandidatSource(source=source, justification=justification)
+
+
+def test_a_decouvrir_insere_apres_body_quand_absent():
+    html_existant = "<html><body>\n<h1>Digest du 14 septembre</h1>\n</body></html>"
+    client = _FakeClient(get_response=_page_publiee(html_existant), put_response=_FakeResponse(200))
+
+    reussite = publish.publier_a_decouvrir(_candidat(), client=client)
+
+    assert reussite is True
+    corps_publie = base64.b64decode(client.put_calls[0][1]["content"]).decode("utf-8")
+    assert "A-DECOUVRIR:DEBUT" in corps_publie
+    assert "candidat-x" in corps_publie
+    assert "Digest du 14 septembre" in corps_publie  # contenu existant préservé
+    assert client.put_calls[0][1]["sha"] == "sha-existant"
+
+
+def test_a_decouvrir_remplace_plutot_que_d_empiler():
+    ancien = "<!-- A-DECOUVRIR:DEBUT -->ancien (semaine d'avant)<!-- A-DECOUVRIR:FIN -->"
+    html_existant = f"<html><body>\n{ancien}\n<h1>Digest</h1>\n</body></html>"
+    client = _FakeClient(get_response=_page_publiee(html_existant), put_response=_FakeResponse(200))
+
+    publish.publier_a_decouvrir(_candidat(id_="nouveau-candidat"), client=client)
+
+    corps_publie = base64.b64decode(client.put_calls[0][1]["content"]).decode("utf-8")
+    assert corps_publie.count("A-DECOUVRIR:DEBUT") == 1
+    assert "ancien (semaine d'avant)" not in corps_publie
+    assert "nouveau-candidat" in corps_publie
+    assert "<h1>Digest</h1>" in corps_publie
+
+
+def test_a_decouvrir_candidat_none_retire_le_panneau_existant():
+    """AC4 : aucun candidat vivant cette semaine — le panneau existant doit
+    être retiré, pas laissé à proposer une source peut-être déjà morte."""
+    ancien = "<!-- A-DECOUVRIR:DEBUT -->ancien-candidat<!-- A-DECOUVRIR:FIN -->"
+    html_existant = f"<html><body>\n{ancien}\n<h1>Digest</h1>\n</body></html>"
+    client = _FakeClient(get_response=_page_publiee(html_existant), put_response=_FakeResponse(200))
+
+    resultat = publish.publier_a_decouvrir(None, client=client)
+
+    assert resultat is True
+    corps_publie = base64.b64decode(client.put_calls[0][1]["content"]).decode("utf-8")
+    assert "A-DECOUVRIR" not in corps_publie
+    assert "ancien-candidat" not in corps_publie
+    assert "<h1>Digest</h1>" in corps_publie
+
+
+def test_a_decouvrir_candidat_none_sans_panneau_existant_ne_fait_rien():
+    html_existant = "<html><body>\n<h1>Digest</h1>\n</body></html>"
+    client = _FakeClient(get_response=_page_publiee(html_existant), put_response=_FakeResponse(200))
+
+    resultat = publish.publier_a_decouvrir(None, client=client)
+
+    assert resultat is None
+    assert client.put_calls == []
+
+
+def test_a_decouvrir_sans_page_deja_publiee_ne_fait_rien():
+    client = _FakeClient(get_response=_FakeResponse(404))
+
+    resultat = publish.publier_a_decouvrir(_candidat(), client=client)
+
+    assert resultat is None
+    assert client.put_calls == []
+
+
+def test_a_decouvrir_contenu_illisible_est_une_vraie_panne():
+    payload_sans_content = {"sha": "sha-existant"}
+    client = _FakeClient(get_response=_FakeResponse(200, payload=payload_sans_content))
+
+    resultat = publish.publier_a_decouvrir(_candidat(), client=client)
+
+    assert resultat is False
+
+
+def test_a_decouvrir_degrade_proprement_sans_jeton(monkeypatch):
+    monkeypatch.setattr(publish, "_jeton_depuis_env", lambda: None)
+    monkeypatch.setattr(publish, "_jeton_depuis_gh_cli", lambda: None)
+
+    resultat = publish.publier_a_decouvrir(_candidat())
+
+    assert resultat is False
+
+
+def test_a_decouvrir_degrade_proprement_sur_panne_reseau():
+    client = _FakeClient(get_leve=httpx.ConnectError("panne réseau"))
+
+    resultat = publish.publier_a_decouvrir(_candidat(), client=client)
+
+    assert resultat is False
+
+
+def test_a_decouvrir_bout_en_bout_avec_le_vrai_fragment_rendu():
+    """Même précaution que pour le récapitulatif de santé : combiner le
+    vrai `render.rendre_a_decouvrir` avec `publish.publier_a_decouvrir` —
+    une dérive du format des marqueurs entre les deux modules serait
+    passée inaperçue si chacun n'était testé qu'isolément."""
+    html_existant = "<html><body>\n<h1>Digest</h1>\n</body></html>"
+    client = _FakeClient(get_response=_page_publiee(html_existant), put_response=_FakeResponse(200))
+
+    reussite = publish.publier_a_decouvrir(_candidat(id_="flux-x"), client=client)
+
+    assert reussite is True
+    corps_publie = base64.b64decode(client.put_calls[0][1]["content"]).decode("utf-8")
+    assert "flux-x" in corps_publie
+    assert "<h1>Digest</h1>" in corps_publie
