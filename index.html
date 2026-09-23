@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Veille tech — le digest du jour</title>
+<style>
+  :root {
+    --bg: #fafafa;
+    --fg: #1a1a1a;
+    --accent: #2b6cb0;
+    --muted: #666666;
+    --card-bg: #ffffff;
+    --border: #e2e2e2;
+    --recommandee-bg: #fff8e1;
+    --recommandee-border: #d9a520;
+    /* Bandeau d'échec (Story 3.2) — injecté après coup par
+       publish.py::_inserer_bandeau sur une page déjà publiée : ces
+       variables doivent donc rester stables, jamais renommées sans
+       adapter render.py::rendre_bandeau_echec en même temps. */
+    --bandeau-echec-bg: #f9d7d5;
+    --bandeau-echec-fg: #7a1f1f;
+    /* Récapitulatif des sources à surveiller (Story 4.3) — même
+       principe que le bandeau d'échec ci-dessus : injecté après coup par
+       publish.py::_inserer_fragment, variables à garder stables. */
+    --recapitulatif-bg: #fff4d6;
+    --recapitulatif-fg: #6b4e00;
+    /* Panneau « À découvrir » (Story 4.4) — même principe, injecté après
+       coup par publish.py::_inserer_fragment, variables à garder stables. */
+    --a-decouvrir-bg: #e3f0ff;
+    --a-decouvrir-fg: #1a4a7a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121212;
+      --fg: #eaeaea;
+      --accent: #7db3ff;
+      --muted: #a0a0a0;
+      --card-bg: #1e1e1e;
+      --border: #333333;
+      --recommandee-bg: #2a2410;
+      --recommandee-border: #caa53d;
+      --bandeau-echec-bg: #3a1f1f;
+      --bandeau-echec-fg: #f5b8b4;
+      --recapitulatif-bg: #3a2f00;
+      --recapitulatif-fg: #f5cf5b;
+      --a-decouvrir-bg: #17324d;
+      --a-decouvrir-fg: #9cc9f5;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 1.25rem 1rem 3rem;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.5;
+    max-width: 640px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  header { margin-bottom: 1.75rem; }
+  h1 { font-size: 1.35rem; margin: 0 0 0.3rem; }
+  .horodatage { color: var(--muted); font-size: 0.85rem; margin: 0; }
+  section.registre { margin-bottom: 2rem; }
+  h2.registre-titre {
+    font-size: 1.05rem;
+    margin: 0 0 0.75rem;
+    border-bottom: 2px solid var(--accent);
+    padding-bottom: 0.35rem;
+  }
+  article.entree {
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 0.9rem 1rem;
+    margin-bottom: 0.75rem;
+  }
+  article.entree--recommandee {
+    background: var(--recommandee-bg);
+    border-color: var(--recommandee-border);
+  }
+  .badge-recommandee {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: var(--recommandee-border);
+    margin-bottom: 0.35rem;
+  }
+  .entree-titre { font-weight: 600; margin: 0 0 0.3rem; font-size: 1rem; }
+  .entree-titre a { color: var(--accent); text-decoration: none; }
+  .entree-titre a:hover { text-decoration: underline; }
+  .entree-accroche { margin: 0; color: var(--fg); font-size: 0.95rem; }
+  .digest-vide { color: var(--muted); font-style: italic; }
+</style>
+</head>
+<body>
+<!-- A-DECOUVRIR:DEBUT -->
+<div style="background:var(--a-decouvrir-bg);color:var(--a-decouvrir-fg);padding:0.75rem 1rem;border-radius:8px;margin:0 0 1rem;font-size:0.95rem;">
+🔭 À découvrir cette semaine : <strong>dbt-blog</strong>
+<p style="margin:0.5rem 0 0;">Billets techniques de l&#x27;éditeur de dbt, outil central de la stack data moderne — angle outillage concret plutôt qu&#x27;actualité générale.</p>
+<p style="margin:0.5rem 0 0;"><a href="https://www.getdbt.com/blog/rss.xml">https://www.getdbt.com/blog/rss.xml</a></p>
+</div>
+<!-- A-DECOUVRIR:FIN -->
+<!-- RECAPITULATIF-SANTE:DEBUT -->
+<div style="background:var(--recapitulatif-bg);color:var(--recapitulatif-fg);padding:0.75rem 1rem;border-radius:8px;margin:0 0 1rem;font-size:0.95rem;">
+🔎 4 source(s) à surveiller :
+<ul style="margin:0.5rem 0 0;padding-left:1.25rem;">
+<li><strong>openai-news</strong> — suspecte : dates suspectes détectées (plusieurs items à la même minute)</li>
+<li><strong>huggingface-blog</strong> — suspecte : dates suspectes détectées (plusieurs items à la même minute)</li>
+<li><strong>hf-daily-papers</strong> — suspecte : dates suspectes détectées (plusieurs items à la même minute)</li>
+<li><strong>eugene-yan</strong> — en_sommeil : 93 jour(s) sans nouvel item</li>
+</ul>
+</div>
+<!-- RECAPITULATIF-SANTE:FIN -->
+<header>
+  <h1>Veille tech</h1>
+  <p class="horodatage">Généré le 22/09/2026 à 00:50 (heure de Dakar)</p>
+</header>
+
+  
+    
+    <section class="registre">
+      <h2 class="registre-titre">Apprendre</h2>
+      
+      <article class="entree">
+        
+        <p class="entree-titre"><a href="https://huggingface.co/blog/rteb">Introducing RTEB: A New Standard for Retrieval Evaluation</a></p>
+        <p class="entree-accroche">Introducing RTEB: A New Standard for Retrieval Evaluation</p>
+      </article>
+      
+      <article class="entree">
+        
+        <p class="entree-titre"><a href="https://huggingface.co/papers/2609.19656">Self-Evolving Search Index</a></p>
+        <p class="entree-accroche">Self-Evolving Search Index</p>
+      </article>
+      
+      <article class="entree">
+        
+        <p class="entree-titre"><a href="https://shows.acast.com/data-gen/episodes/redif-top-10-blablacar-lex-chief-product-officer-partage-sa">Redif Top 10 : BlaBlaCar - L’ex-Chief Product Officer partage sa Stratégie Data</a></p>
+        <p class="entree-accroche">Redif Top 10 : BlaBlaCar - L’ex-Chief Product Officer partage sa Stratégie Data</p>
+      </article>
+      
+    </section>
+    
+  
+    
+    <section class="registre">
+      <h2 class="registre-titre">Ce qui bouge</h2>
+      
+      <article class="entree">
+        
+        <p class="entree-titre"><a href="https://www.briefia.fr/article/v7-dote-ses-agents-ia-d-une-memoire-d-entreprise">V7 dote ses agents IA d’une mémoire d’entreprise</a></p>
+        <p class="entree-accroche">V7 dote ses agents IA d’une mémoire d’entreprise</p>
+      </article>
+      
+      <article class="entree">
+        
+        <p class="entree-titre"><a href="https://www.briefia.fr/article/navigateurs-ia-detournes-deux-cve-et-20-000-de-primes">Navigateurs IA détournés : deux CVE et 20 000 $ de primes</a></p>
+        <p class="entree-accroche">Navigateurs IA détournés : deux CVE et 20 000 $ de primes</p>
+      </article>
+      
+      <article class="entree">
+        
+        <p class="entree-titre"><a href="https://openai.com/index/warp">Warp’s big bet on building open source with GPT-5.5</a></p>
+        <p class="entree-accroche">Warp’s big bet on building open source with GPT-5.5</p>
+      </article>
+      
+    </section>
+    
+  
+    
+    <section class="registre">
+      <h2 class="registre-titre">Pour le métier</h2>
+      
+      <article class="entree">
+        
+        <p class="entree-titre"><a href="https://www.decideo.fr/Pigment-lance-Frames-pour-creer-des-interfaces-de-planification-avec-l-IA_a14791.html">Pigment lance Frames pour créer des interfaces de planification avec l’IA</a></p>
+        <p class="entree-accroche">Pigment lance Frames pour créer des interfaces de planification avec l’IA</p>
+      </article>
+      
+      <article class="entree">
+        
+        <p class="entree-titre"><a href="https://www.lemondeinformatique.fr/actualites/lire-les-chercheurs-de-hacktron-ai-ont-utilise-claude-pour-pirater-openai-100799.html">Les chercheurs de Hacktron AI ont utilisé Claude pour pirater OpenAI</a></p>
+        <p class="entree-accroche">Les chercheurs de Hacktron AI ont utilisé Claude pour pirater OpenAI</p>
+      </article>
+      
+    </section>
+    
+  
+
+</body>
+</html>
