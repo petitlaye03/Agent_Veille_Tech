@@ -9,7 +9,12 @@
 #
 # Prérequis réels avant que ce workflow puisse réussir (voir Dev Notes de
 # la story 3.1, non résolus par cette story elle-même) :
-#   - secret ANTHROPIC_API_KEY (sinon enrich/llm.py dégrade : titres en repli)
+#   - la clé du fournisseur LLM actif, sinon enrich/llm.py dégrade et
+#     chaque accroche n'est que le titre recopié (c'est ce qui s'est
+#     produit du 18 au 22 septembre 2026, aucun secret n'ayant jamais été
+#     créé) : variable de dépôt LLM_PROVIDER ("anthropic" par défaut, ou
+#     "openai"), plus le secret correspondant — ANTHROPIC_API_KEY ou
+#     OPENAI_API_KEY
 #   - aucun secret dédié pour la publication ni pour l'état « déjà vu » :
 #     depuis le 2026-09-18, `Agent_Veille_Tech` est public et sert à la fois
 #     de dépôt source et de dépôt de sortie (consolidation demandée par
@@ -93,7 +98,23 @@ jobs:
 
       - name: Exécuter le pipeline
         env:
+          # Les trois variables de la frontière LLM (AD-7). Corrigé le
+          # 2026-09-23 : la bascule de fournisseur du 2026-09-18 avait
+          # modifié `enrich/llm.py` sans toucher ce fichier — seule
+          # ANTHROPIC_API_KEY y était transmise, si bien qu'une clé OpenAI
+          # ajoutée en secret n'aurait jamais atteint le job. Symptôme
+          # observé sur les runs réels des 18 au 22 septembre : chaque
+          # accroche publiée n'était que le titre recopié (repli documenté
+          # de `generer_accroche`), jamais du français rédigé.
+          #
+          # LLM_PROVIDER est une *variable* de dépôt (Settings → Variables),
+          # pas un secret : ce n'est pas une donnée sensible, et la voir en
+          # clair dans les journaux d'exécution aide à diagnostiquer. Non
+          # renseignée, elle vaut "" — `_fournisseur()` retombe alors sur
+          # "anthropic", son défaut historique.
+          LLM_PROVIDER: ${{ vars.LLM_PROVIDER }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           # Mappé sur GITHUB_TOKEN (nom attendu par publish.py, inchangé).
           # Jusqu'au 2026-09-18 il fallait ici un PAT dédié
           # (DIGEST_PUBLISH_TOKEN) scopé à un second dépôt de sortie — ce

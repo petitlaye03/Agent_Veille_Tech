@@ -410,6 +410,19 @@ Demandé par Abdoulaye en ces termes : « Je ne suis pas fier du rendu […] c'e
 | Entrée recommandée (★) | aucune | 1 |
 | Accroches | génériques, ~45 mots | concrètes (noms, versions, chiffres) |
 
+### Troisième bug, découvert en poussant : le LLM ne tournait pas en production
+
+En fusionnant les commits du dépôt distant, on découvre que **le pipeline nocturne tourne réellement depuis le 18 septembre** (cinq archives publiées, `index.html` en ligne) — première validation de bout en bout de `publish.py` contre l'API GitHub réelle, jusque-là seulement simulée.
+
+Mais les accroches publiées n'étaient que **les titres recopiés**, en anglais : le repli documenté de `generer_accroche` quand aucun client LLM n'est résolu. Deux causes cumulées :
+
+1. **Aucun secret n'a jamais été créé sur le dépôt** (`gh secret list` : vide).
+2. **La bascule de fournisseur du 2026-09-18 n'a jamais touché les workflows** : `pipeline-nocturne.yml` ne transmettait que `ANTHROPIC_API_KEY`. Même en ajoutant une clé OpenAI en secret, elle n'aurait jamais atteint le job — `LLM_PROVIDER` et `OPENAI_API_KEY` n'y figuraient pas.
+
+Corrigé : le step principal transmet désormais les trois variables. `LLM_PROVIDER` est une **variable** de dépôt (pas un secret — ce n'est pas une donnée sensible, et la voir en clair dans les journaux aide au diagnostic) ; les deux clés restent des secrets. Reste à créer côté GitHub : la variable `LLM_PROVIDER=openai` et le secret `OPENAI_API_KEY` (action réelle sous le compte d'Abdoulaye).
+
+**La leçon** : un changement de configuration côté code (`.env`, `LLM_PROVIDER`) a un jumeau côté déploiement (secrets et variables du workflow) qu'il faut modifier dans le même mouvement — sans quoi le comportement diverge entre la machine de développement, où tout marche, et la production, où rien ne marche, sans le moindre message d'erreur.
+
 ### Deux bugs trouvés en écrivant les tests de l'audit
 
 - **`nom: "   "` ne déclenchait pas le repli sur l'`id`** : une chaîne d'espaces est *truthy*. `config._normaliser` la nettoie, mais un `SourceConfig` construit à la main ne passe pas par là — la page affichait un blanc. Même piège de « clé blanche » que `publish._jeton_depuis_env` (Story 1.6).
