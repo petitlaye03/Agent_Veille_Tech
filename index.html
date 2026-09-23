@@ -3,193 +3,360 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Veille quotidienne IA, data et tech — l'essentiel du jour, en français.">
 <title>Veille tech — le digest du jour</title>
 <style>
   :root {
-    --bg: #fafafa;
-    --fg: #1a1a1a;
-    --accent: #2b6cb0;
-    --muted: #666666;
-    --card-bg: #ffffff;
-    --border: #e2e2e2;
-    --recommandee-bg: #fff8e1;
-    --recommandee-border: #d9a520;
+    --papier: #faf8f5;
+    --surface: #ffffff;
+    --encre: #1a1815;
+    --encre-2: #4a453e;
+    --encre-3: #857f74;
+    --filet: #e4dfd6;
+    --accent: #a33a2a;
+    --lien: #1c4f73;
+    --attention: #8a5a12;
+
+    /* Un accent par registre : la couleur situe la section d'un coup d'œil
+       pendant le défilement, sans ajouter le moindre libellé. */
+    --reg-apprendre: #2f5d8c;
+    --reg-ce_qui_bouge: #a33a2a;
+    --reg-pour_le_metier: #45704a;
+
     /* Bandeau d'échec (Story 3.2) — injecté après coup par
-       publish.py::_inserer_bandeau sur une page déjà publiée : ces
-       variables doivent donc rester stables, jamais renommées sans
-       adapter render.py::rendre_bandeau_echec en même temps. */
-    --bandeau-echec-bg: #f9d7d5;
-    --bandeau-echec-fg: #7a1f1f;
-    /* Récapitulatif des sources à surveiller (Story 4.3) — même
-       principe que le bandeau d'échec ci-dessus : injecté après coup par
-       publish.py::_inserer_fragment, variables à garder stables. */
-    --recapitulatif-bg: #fff4d6;
+       publish.py::_inserer_fragment sur une page déjà publiée : ces
+       variables doivent rester stables, jamais renommées sans adapter
+       render.py::rendre_bandeau_echec en même temps. */
+    --bandeau-echec-bg: #fbeae7;
+    --bandeau-echec-fg: #8a2318;
+    /* Récapitulatif des sources à surveiller (Story 4.3) — même principe. */
+    --recapitulatif-bg: #fcf3dc;
     --recapitulatif-fg: #6b4e00;
-    /* Panneau « À découvrir » (Story 4.4) — même principe, injecté après
-       coup par publish.py::_inserer_fragment, variables à garder stables. */
-    --a-decouvrir-bg: #e3f0ff;
-    --a-decouvrir-fg: #1a4a7a;
+    /* Panneau « À découvrir » (Story 4.4) — même principe. */
+    --a-decouvrir-bg: #e8f0f8;
+    --a-decouvrir-fg: #1e4b72;
+
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #121212;
-      --fg: #eaeaea;
-      --accent: #7db3ff;
-      --muted: #a0a0a0;
-      --card-bg: #1e1e1e;
-      --border: #333333;
-      --recommandee-bg: #2a2410;
-      --recommandee-border: #caa53d;
-      --bandeau-echec-bg: #3a1f1f;
-      --bandeau-echec-fg: #f5b8b4;
-      --recapitulatif-bg: #3a2f00;
-      --recapitulatif-fg: #f5cf5b;
-      --a-decouvrir-bg: #17324d;
-      --a-decouvrir-fg: #9cc9f5;
+      --papier: #131210;
+      --surface: #1c1a17;
+      --encre: #ece7dd;
+      --encre-2: #b6afa3;
+      --encre-3: #8a8377;
+      --filet: #2e2a25;
+      --accent: #e08b72;
+      --lien: #93c2e8;
+      --attention: #d7a85a;
+
+      --reg-apprendre: #7fa9d8;
+      --reg-ce_qui_bouge: #e08b72;
+      --reg-pour_le_metier: #8cc191;
+
+      --bandeau-echec-bg: #38201c;
+      --bandeau-echec-fg: #f3b5a8;
+      --recapitulatif-bg: #342a10;
+      --recapitulatif-fg: #edc96a;
+      --a-decouvrir-bg: #16293a;
+      --a-decouvrir-fg: #9dc6ea;
     }
   }
+
   * { box-sizing: border-box; }
+
   body {
+    margin: 0 auto;
+    max-width: 680px;
+    padding: 0 20px 72px;
+    background: var(--papier);
+    color: var(--encre);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+  }
+
+  a { color: var(--lien); }
+
+  /* --- Bandeau-titre --------------------------------------------------- */
+  .bandeau-titre {
+    padding: 44px 0 18px;
+    border-bottom: 3px double var(--filet);
+    margin-bottom: 30px;
+  }
+  .surtitre {
+    margin: 0 0 10px;
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  .bandeau-titre h1 {
     margin: 0;
-    padding: 1.25rem 1rem 3rem;
-    background: var(--bg);
-    color: var(--fg);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    line-height: 1.5;
-    max-width: 640px;
-    margin-left: auto;
-    margin-right: auto;
+    font-family: var(--serif);
+    font-size: 2.35rem;
+    font-weight: 600;
+    line-height: 1.1;
+    letter-spacing: -0.015em;
   }
-  header { margin-bottom: 1.75rem; }
-  h1 { font-size: 1.35rem; margin: 0 0 0.3rem; }
-  .horodatage { color: var(--muted); font-size: 0.85rem; margin: 0; }
-  section.registre { margin-bottom: 2rem; }
-  h2.registre-titre {
-    font-size: 1.05rem;
-    margin: 0 0 0.75rem;
-    border-bottom: 2px solid var(--accent);
-    padding-bottom: 0.35rem;
+  .ourlet {
+    margin: 12px 0 0;
+    font-size: 0.82rem;
+    color: var(--encre-3);
   }
-  article.entree {
-    background: var(--card-bg);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 0.9rem 1rem;
-    margin-bottom: 0.75rem;
+
+  /* --- La « une » ------------------------------------------------------ */
+  .une {
+    background: var(--surface);
+    border: 1px solid var(--filet);
+    border-left: 3px solid var(--accent);
+    border-radius: 3px;
+    padding: 22px 22px 18px;
+    margin-bottom: 38px;
   }
-  article.entree--recommandee {
-    background: var(--recommandee-bg);
-    border-color: var(--recommandee-border);
+  .une-mention {
+    margin: 0 0 10px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--accent);
   }
-  .badge-recommandee {
-    display: inline-block;
+  .une .entree-titre { font-size: 1.5rem; line-height: 1.22; }
+  .une .entree-accroche { font-size: 1.02rem; color: var(--encre-2); }
+
+  /* --- Sections -------------------------------------------------------- */
+  .registre { margin-bottom: 40px; }
+  .registre-titre {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 0 0 4px;
     font-size: 0.72rem;
     font-weight: 700;
-    letter-spacing: 0.02em;
-    color: var(--recommandee-border);
-    margin-bottom: 0.35rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--teinte, var(--encre-2));
   }
-  .entree-titre { font-weight: 600; margin: 0 0 0.3rem; font-size: 1rem; }
-  .entree-titre a { color: var(--accent); text-decoration: none; }
-  .entree-titre a:hover { text-decoration: underline; }
-  .entree-accroche { margin: 0; color: var(--fg); font-size: 0.95rem; }
-  .digest-vide { color: var(--muted); font-style: italic; }
+  .registre-titre .filet { flex: 1; height: 1px; background: var(--filet); }
+  .registre-titre .compte {
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--encre-3);
+  }
+  .registre--apprendre { --teinte: var(--reg-apprendre); }
+  .registre--ce_qui_bouge { --teinte: var(--reg-ce_qui_bouge); }
+  .registre--pour_le_metier { --teinte: var(--reg-pour_le_metier); }
+
+  /* --- Entrées --------------------------------------------------------- */
+  .entree { padding: 20px 0 18px; border-top: 1px solid var(--filet); }
+  .registre .entree:first-of-type { border-top: none; padding-top: 14px; }
+  .une .entree, .une .entree:first-of-type { border: none; padding: 0; }
+
+  .entree-titre {
+    margin: 0 0 8px;
+    font-family: var(--serif);
+    font-size: 1.16rem;
+    font-weight: 600;
+    line-height: 1.3;
+    letter-spacing: -0.005em;
+  }
+  .entree-titre a { color: var(--encre); text-decoration: none; }
+  .entree-titre a:hover { color: var(--lien); text-decoration: underline; text-underline-offset: 3px; }
+
+  .entree-accroche { margin: 0 0 12px; color: var(--encre-2); font-size: 0.95rem; }
+
+  .entree-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 7px;
+    margin: 0;
+    font-size: 0.76rem;
+    color: var(--encre-3);
+  }
+  .entree-meta .source { font-weight: 600; color: var(--teinte, var(--encre-2)); }
+  .entree-meta .sep { opacity: 0.45; }
+  .entree-meta .format { display: inline-flex; align-items: center; gap: 4px; }
+  .entree-meta svg { width: 13px; height: 13px; flex: none; }
+  .entree-meta .age--ancien { color: var(--attention); font-weight: 600; }
+
+  /* --- Pied de page ---------------------------------------------------- */
+  .pied {
+    margin-top: 48px;
+    padding-top: 18px;
+    border-top: 3px double var(--filet);
+    font-size: 0.76rem;
+    color: var(--encre-3);
+  }
+  .pied p { margin: 0 0 4px; }
+
+  .digest-vide {
+    margin: 40px 0;
+    padding: 28px 22px;
+    background: var(--surface);
+    border: 1px solid var(--filet);
+    border-radius: 3px;
+    font-family: var(--serif);
+    font-size: 1.1rem;
+    color: var(--encre-2);
+    text-align: center;
+  }
+
+  @media (max-width: 420px) {
+    body { padding: 0 16px 56px; }
+    .bandeau-titre { padding-top: 32px; }
+    .bandeau-titre h1 { font-size: 1.95rem; }
+    .une { padding: 18px 16px 15px; }
+    .une .entree-titre { font-size: 1.3rem; }
+  }
+
+  /* Confort de lecture : une entrée ne doit jamais être coupée en deux par
+     un saut de page à l'impression, ni voir ses liens perdre leur cible. */
+  @media print {
+    body { max-width: none; color: #000; background: #fff; }
+    .entree, .une { break-inside: avoid; }
+    .entree-titre a::after { content: " (" attr(href) ")"; font-size: 0.7rem; font-weight: 400; }
+  }
 </style>
 </head>
 <body>
-<!-- A-DECOUVRIR:DEBUT -->
-<div style="background:var(--a-decouvrir-bg);color:var(--a-decouvrir-fg);padding:0.75rem 1rem;border-radius:8px;margin:0 0 1rem;font-size:0.95rem;">
-🔭 À découvrir cette semaine : <strong>dbt-blog</strong>
-<p style="margin:0.5rem 0 0;">Billets techniques de l&#x27;éditeur de dbt, outil central de la stack data moderne — angle outillage concret plutôt qu&#x27;actualité générale.</p>
-<p style="margin:0.5rem 0 0;"><a href="https://www.getdbt.com/blog/rss.xml">https://www.getdbt.com/blog/rss.xml</a></p>
-</div>
-<!-- A-DECOUVRIR:FIN -->
-<!-- RECAPITULATIF-SANTE:DEBUT -->
-<div style="background:var(--recapitulatif-bg);color:var(--recapitulatif-fg);padding:0.75rem 1rem;border-radius:8px;margin:0 0 1rem;font-size:0.95rem;">
-🔎 4 source(s) à surveiller :
-<ul style="margin:0.5rem 0 0;padding-left:1.25rem;">
-<li><strong>openai-news</strong> — suspecte : dates suspectes détectées (plusieurs items à la même minute)</li>
-<li><strong>huggingface-blog</strong> — suspecte : dates suspectes détectées (plusieurs items à la même minute)</li>
-<li><strong>hf-daily-papers</strong> — suspecte : dates suspectes détectées (plusieurs items à la même minute)</li>
-<li><strong>eugene-yan</strong> — en_sommeil : 93 jour(s) sans nouvel item</li>
-</ul>
-</div>
-<!-- RECAPITULATIF-SANTE:FIN -->
-<header>
+<header class="bandeau-titre">
+  <p class="surtitre">IA · Data · Tech</p>
   <h1>Veille tech</h1>
-  <p class="horodatage">Généré le 22/09/2026 à 00:50 (heure de Dakar)</p>
+  <p class="ourlet">
+    mercredi 23 septembre 2026 · 8 entrées
+  </p>
 </header>
 
+
+
+
   
-    
-    <section class="registre">
-      <h2 class="registre-titre">Apprendre</h2>
-      
-      <article class="entree">
-        
-        <p class="entree-titre"><a href="https://huggingface.co/blog/rteb">Introducing RTEB: A New Standard for Retrieval Evaluation</a></p>
-        <p class="entree-accroche">Introducing RTEB: A New Standard for Retrieval Evaluation</p>
+  <section class="registre registre--apprendre">
+    <h2 class="registre-titre">
+      <span>Apprendre</span>
+      <span class="filet"></span>
+      <span class="compte">3</span>
+    </h2>
+    <article class="entree">
+        <h3 class="entree-titre"><a href="https://simonwillison.net/2026/Sep/4/rogue-agent-wikis/" rel="noopener noreferrer">OpenAI&#39;s rogue agents were caught communicating via public wikis</a></h3>
+        <p class="entree-accroche">OpenAI&#39;s rogue agents were caught communicating via public wikis</p>
+        <p class="entree-meta">
+          <span class="source">Simon Willison</span>
+          <span class="sep">·</span><span class="format"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h11v14H4z"/><path d="M15 9h5v8a2 2 0 0 1-2 2h-3"/><path d="M7 9h5M7 12h5M7 15h3"/></svg>Article</span>
+          <span class="sep">·</span>
+          <time datetime="2026-09-04" title="4 septembre 2026"
+                class="">il y a 2 semaines</time>
+        </p>
+      </article><article class="entree">
+        <h3 class="entree-titre"><a href="https://huggingface.co/papers/2609.24997" rel="noopener noreferrer">VideoGen-Agent: Reinforcing Video Generation Agents</a></h3>
+        <p class="entree-accroche">VideoGen-Agent: Reinforcing Video Generation Agents</p>
+        <p class="entree-meta">
+          <span class="source">HF Daily Papers</span>
+          <span class="sep">·</span><span class="format"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h6a3 3 0 0 1 3 3v11a2 2 0 0 0-2-2H3z"/><path d="M21 5h-6a3 3 0 0 0-3 3v11a2 2 0 0 1 2-2h7z"/></svg>Papier</span>
+          <span class="sep">·</span>
+          <time datetime="2026-09-20" title="20 septembre 2026"
+                class="">il y a 2 jours</time>
+        </p>
+      </article><article class="entree">
+        <h3 class="entree-titre"><a href="https://huggingface.co/papers/2609.21465" rel="noopener noreferrer">OmniVChat: Synthesizing, Benchmarking, and Training for Native Audio-Visual Dialogue</a></h3>
+        <p class="entree-accroche">OmniVChat: Synthesizing, Benchmarking, and Training for Native Audio-Visual Dialogue</p>
+        <p class="entree-meta">
+          <span class="source">HF Daily Papers</span>
+          <span class="sep">·</span><span class="format"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h6a3 3 0 0 1 3 3v11a2 2 0 0 0-2-2H3z"/><path d="M21 5h-6a3 3 0 0 0-3 3v11a2 2 0 0 1 2-2h7z"/></svg>Papier</span>
+          <span class="sep">·</span>
+          <time datetime="2026-09-17" title="17 septembre 2026"
+                class="">il y a 5 jours</time>
+        </p>
       </article>
-      
-      <article class="entree">
-        
-        <p class="entree-titre"><a href="https://huggingface.co/papers/2609.19656">Self-Evolving Search Index</a></p>
-        <p class="entree-accroche">Self-Evolving Search Index</p>
-      </article>
-      
-      <article class="entree">
-        
-        <p class="entree-titre"><a href="https://shows.acast.com/data-gen/episodes/redif-top-10-blablacar-lex-chief-product-officer-partage-sa">Redif Top 10 : BlaBlaCar - L’ex-Chief Product Officer partage sa Stratégie Data</a></p>
-        <p class="entree-accroche">Redif Top 10 : BlaBlaCar - L’ex-Chief Product Officer partage sa Stratégie Data</p>
-      </article>
-      
-    </section>
-    
-  
-    
-    <section class="registre">
-      <h2 class="registre-titre">Ce qui bouge</h2>
-      
-      <article class="entree">
-        
-        <p class="entree-titre"><a href="https://www.briefia.fr/article/v7-dote-ses-agents-ia-d-une-memoire-d-entreprise">V7 dote ses agents IA d’une mémoire d’entreprise</a></p>
-        <p class="entree-accroche">V7 dote ses agents IA d’une mémoire d’entreprise</p>
-      </article>
-      
-      <article class="entree">
-        
-        <p class="entree-titre"><a href="https://www.briefia.fr/article/navigateurs-ia-detournes-deux-cve-et-20-000-de-primes">Navigateurs IA détournés : deux CVE et 20 000 $ de primes</a></p>
-        <p class="entree-accroche">Navigateurs IA détournés : deux CVE et 20 000 $ de primes</p>
-      </article>
-      
-      <article class="entree">
-        
-        <p class="entree-titre"><a href="https://openai.com/index/warp">Warp’s big bet on building open source with GPT-5.5</a></p>
-        <p class="entree-accroche">Warp’s big bet on building open source with GPT-5.5</p>
-      </article>
-      
-    </section>
-    
-  
-    
-    <section class="registre">
-      <h2 class="registre-titre">Pour le métier</h2>
-      
-      <article class="entree">
-        
-        <p class="entree-titre"><a href="https://www.decideo.fr/Pigment-lance-Frames-pour-creer-des-interfaces-de-planification-avec-l-IA_a14791.html">Pigment lance Frames pour créer des interfaces de planification avec l’IA</a></p>
-        <p class="entree-accroche">Pigment lance Frames pour créer des interfaces de planification avec l’IA</p>
-      </article>
-      
-      <article class="entree">
-        
-        <p class="entree-titre"><a href="https://www.lemondeinformatique.fr/actualites/lire-les-chercheurs-de-hacktron-ai-ont-utilise-claude-pour-pirater-openai-100799.html">Les chercheurs de Hacktron AI ont utilisé Claude pour pirater OpenAI</a></p>
-        <p class="entree-accroche">Les chercheurs de Hacktron AI ont utilisé Claude pour pirater OpenAI</p>
-      </article>
-      
-    </section>
-    
+  </section>
   
 
+  
+  <section class="registre registre--ce_qui_bouge">
+    <h2 class="registre-titre">
+      <span>Ce qui bouge</span>
+      <span class="filet"></span>
+      <span class="compte">3</span>
+    </h2>
+    <article class="entree">
+        <h3 class="entree-titre"><a href="https://www.briefia.fr/article/disrupt-2026-met-en-avant-cinq-sessions-ia-dediees-a-la-securite" rel="noopener noreferrer">Disrupt 2026 met en avant cinq sessions IA dédiées à la sécurité</a></h3>
+        <p class="entree-accroche">Disrupt 2026 met en avant cinq sessions IA dédiées à la sécurité</p>
+        <p class="entree-meta">
+          <span class="source">Brief IA</span>
+          <span class="sep">·</span><span class="format"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h11v14H4z"/><path d="M15 9h5v8a2 2 0 0 1-2 2h-3"/><path d="M7 9h5M7 12h5M7 15h3"/></svg>Article</span>
+          <span class="sep">·</span>
+          <time datetime="2026-09-22" title="22 septembre 2026"
+                class="">aujourd&#39;hui</time>
+        </p>
+      </article><article class="entree">
+        <h3 class="entree-titre"><a href="https://www.briefia.fr/article/incidents-lors-d-evaluations-d-ia-demissions-et-reponses-proposees" rel="noopener noreferrer">Incidents lors d’évaluations d’IA : démissions et réponses proposées</a></h3>
+        <p class="entree-accroche">Incidents lors d’évaluations d’IA : démissions et réponses proposées</p>
+        <p class="entree-meta">
+          <span class="source">Brief IA</span>
+          <span class="sep">·</span><span class="format"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h11v14H4z"/><path d="M15 9h5v8a2 2 0 0 1-2 2h-3"/><path d="M7 9h5M7 12h5M7 15h3"/></svg>Article</span>
+          <span class="sep">·</span>
+          <time datetime="2026-09-22" title="22 septembre 2026"
+                class="">aujourd&#39;hui</time>
+        </p>
+      </article><article class="entree">
+        <h3 class="entree-titre"><a href="https://openai.com/index/reimagining-advertising-with-ai" rel="noopener noreferrer">Reimagining advertising with AI</a></h3>
+        <p class="entree-accroche">Reimagining advertising with AI</p>
+        <p class="entree-meta">
+          <span class="source">OpenAI</span>
+          <span class="sep">·</span><span class="format"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h11v14H4z"/><path d="M15 9h5v8a2 2 0 0 1-2 2h-3"/><path d="M7 9h5M7 12h5M7 15h3"/></svg>Article</span>
+          <span class="sep">·</span>
+          <time datetime="2026-09-16" title="16 septembre 2026"
+                class="">il y a 6 jours</time>
+        </p>
+      </article>
+  </section>
+  
+
+  
+  <section class="registre registre--pour_le_metier">
+    <h2 class="registre-titre">
+      <span>Pour le métier</span>
+      <span class="filet"></span>
+      <span class="compte">2</span>
+    </h2>
+    <article class="entree">
+        <h3 class="entree-titre"><a href="https://www.decideo.fr/Souverainete-des-donnees-Semarchy-etend-ses-options-d-auto-hebergement-avec-la-prise-en-charge-de-Red-Hat-OpenShift-et_a14803.html" rel="noopener noreferrer">Souveraineté des données : Semarchy étend ses options d’auto-hébergement avec la prise en charge de Red Hat® OpenShift® et SUSE® Rancher® RKE2</a></h3>
+        <p class="entree-accroche">Souveraineté des données : Semarchy étend ses options d’auto-hébergement avec la prise en charge de Red Hat® OpenShift® et SUSE® Rancher® RKE2</p>
+        <p class="entree-meta">
+          <span class="source">Décideo</span>
+          <span class="sep">·</span><span class="format"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h11v14H4z"/><path d="M15 9h5v8a2 2 0 0 1-2 2h-3"/><path d="M7 9h5M7 12h5M7 15h3"/></svg>Article</span>
+          <span class="sep">·</span>
+          <time datetime="2026-09-15" title="15 septembre 2026"
+                class="">il y a 7 jours</time>
+        </p>
+      </article><article class="entree">
+        <h3 class="entree-titre"><a href="https://www.decideo.fr/Salesforce-devoile-Koa-son-premier-modele-de-raisonnement-dedie-au-CRM-concu-a-partir-de-NVIDIA-Nemotron_a14800.html" rel="noopener noreferrer">Salesforce dévoile Koa, son premier modèle de raisonnement dédié au CRM, conçu à partir de NVIDIA Nemotron</a></h3>
+        <p class="entree-accroche">Salesforce dévoile Koa, son premier modèle de raisonnement dédié au CRM, conçu à partir de NVIDIA Nemotron</p>
+        <p class="entree-meta">
+          <span class="source">Décideo</span>
+          <span class="sep">·</span><span class="format"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h11v14H4z"/><path d="M15 9h5v8a2 2 0 0 1-2 2h-3"/><path d="M7 9h5M7 12h5M7 15h3"/></svg>Article</span>
+          <span class="sep">·</span>
+          <time datetime="2026-09-15" title="15 septembre 2026"
+                class="">il y a 7 jours</time>
+        </p>
+      </article>
+  </section>
+  
+
+
+
+
+<footer class="pied">
+  <p>Généré le 23/09/2026 à 00:34 (heure de Dakar).</p>
+  <p>Tri automatique par affinité avec un profil éditable — les liens pointent toujours vers la source d'origine.</p>
+</footer>
 </body>
 </html>
