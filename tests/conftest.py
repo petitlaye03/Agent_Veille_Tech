@@ -13,7 +13,7 @@ explicitement par son chemin (`test_profil.py`, `test_socle_reel.py`).
 
 import pytest
 
-from veille import collect
+from veille import collect, filter as filtre
 
 
 @pytest.fixture(autouse=True)
@@ -51,3 +51,17 @@ def profil_neutre_par_defaut(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(collect, "DEFAULT_PROFIL_PATH", profil)
     monkeypatch.setattr(collect, "DEFAULT_SCORING_PATH", scoring)
     monkeypatch.setattr(collect, "DEFAULT_QUOTAS_PATH", quotas)
+
+    # Quatrième neutralisation, même leçon que les trois précédentes (audit
+    # du 2026-09-22) : le filtre de fraîcheur introduit par l'audit compare
+    # `date_publication` à l'heure réelle du run, alors que les fixtures du
+    # dépôt portent des dates figées dans le passé. Sans ce garde-fou, une
+    # trentaine de tests sans aucun rapport avec la fraîcheur se mettaient à
+    # observer zéro item — exactement le symptôme décrit plus haut pour le
+    # profil et les quotas.
+    #
+    # Les tests qui portent réellement sur la fraîcheur passent un horizon
+    # explicite (`test_filter.py`) ou re-substituent cette constante
+    # (`test_collecte_integration.py`) : le filtre reste donc bel et bien
+    # exercé, jamais désactivé partout sans contrepartie.
+    monkeypatch.setattr(filtre, "HORIZON_FRAICHEUR_DEFAUT", 100_000)

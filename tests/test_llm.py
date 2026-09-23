@@ -629,3 +629,66 @@ def test_marquer_recommandation_ne_modifie_pas_les_entrees_non_gagnantes():
 
     assert resultat[1] is entrees[1]  # objet inchangé, pas une copie
     assert resultat[0] is not entrees[0]  # nouvelle instance (frozen + replace)
+
+
+# --- Audit du 2026-09-22 : le profil atteint enfin la rédaction -------
+
+
+class _ProfilSimule:
+    def __init__(self, posture=(), prioritaire=()):
+        self.posture = posture
+        self.prioritaire = prioritaire
+
+
+def test_prompt_systeme_sans_profil_reste_identique():
+    """Tous les appels et tests antérieurs à l'audit gardent exactement le
+    comportement qu'ils avaient."""
+    assert llm._prompt_systeme() == llm._PROMPT_SYSTEME
+    assert llm._prompt_systeme(_ProfilSimule()) == llm._PROMPT_SYSTEME
+
+
+def test_prompt_systeme_joint_la_posture_et_les_themes_prioritaires():
+    prompt = llm._prompt_systeme(
+        _ProfilSimule(posture=("Junior DS à Dakar.",), prioritaire=("RAG", "agents"))
+    )
+
+    assert llm._PROMPT_SYSTEME in prompt
+    assert "Junior DS à Dakar." in prompt
+    assert "RAG, agents" in prompt
+
+
+def test_prompt_systeme_borne_le_nombre_de_mots_cles():
+    """`profil.md` est fait pour être enrichi librement : cent mots-clés
+    seraient facturés à chaque item, tous les soirs."""
+    prompt = llm._prompt_systeme(
+        _ProfilSimule(prioritaire=tuple(f"mot{i}" for i in range(100)))
+    )
+
+    assert f"mot{llm.MOTS_CLES_DANS_PROMPT - 1}" in prompt
+    assert f"mot{llm.MOTS_CLES_DANS_PROMPT}" not in prompt
+
+
+def test_generer_accroche_transmet_le_profil_au_modele():
+    client = _ClientSimule(texte="Une accroche.")
+
+    llm.generer_accroche(_make_item(), client, profil=_ProfilSimule(prioritaire=("RAG",)))
+
+    assert "RAG" in client.messages.derniere_requete["system"]
+
+
+def test_enrichir_transmet_le_profil_a_chaque_item():
+    client = _ClientSimule(texte="Une accroche.")
+
+    llm.enrichir([_make_item(), _make_item()], client, profil=_ProfilSimule(prioritaire=("RAG",)))
+
+    assert "RAG" in client.messages.derniere_requete["system"]
+
+
+def test_enrichir_sans_profil_ne_change_rien():
+    """Signature additive : `profil` est le quatrième paramètre, optionnel."""
+    client = _ClientSimule(texte="Une accroche.")
+
+    entrees = llm.enrichir([_make_item()], client)
+
+    assert entrees[0].accroche == "Une accroche."
+    assert client.messages.derniere_requete["system"] == llm._PROMPT_SYSTEME

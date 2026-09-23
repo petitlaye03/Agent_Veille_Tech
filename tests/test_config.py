@@ -2,7 +2,7 @@ import textwrap
 
 import pytest
 
-from veille.config import SourceConfig, load_sources
+from veille.config import FORMAT_DEFAUT, SourceConfig, load_sources
 
 
 def test_load_sources_lit_un_fichier_valide(tmp_path):
@@ -174,3 +174,75 @@ def test_un_seuil_signal_invalide_n_empeche_pas_la_collecte(tmp_path):
 
     assert retenus == [item]
     assert rapport.total_ecartes == 0
+
+
+# --- Audit du 2026-09-22 : nom, format, horizon de fraîcheur ----------
+
+
+def _ecrire(tmp_path, contenu):
+    chemin = tmp_path / "sources.yaml"
+    chemin.write_text(contenu, encoding="utf-8")
+    return chemin
+
+
+
+def test_source_sans_metadonnees_d_affichage_garde_des_valeurs_sures():
+    """Les trois champs sont facultatifs : une `sources.yaml` antérieure à
+    l'audit doit continuer de se charger exactement comme avant."""
+    source = SourceConfig(id="s", type="rss", url="u", langue="fr", registre="apprendre")
+
+    assert source.nom == ""
+    assert source.format == FORMAT_DEFAUT
+    assert source.horizon_jours is None
+
+
+def test_format_est_normalise_en_minuscules(tmp_path):
+    chemin = _ecrire(tmp_path, "sources:\n  - {id: s, type: rss, url: u, langue: fr, registre: apprendre, format: PODCAST}\n")
+
+    assert load_sources(chemin)[0].format == "podcast"
+
+
+def test_format_inconnu_retombe_sur_le_defaut_avec_avertissement(tmp_path, caplog):
+    """Laisser passer un format inventé produirait une pastille vide sur la
+    page plutôt qu'un avertissement lisible."""
+    chemin = _ecrire(tmp_path, "sources:\n  - {id: s, type: rss, url: u, langue: fr, registre: apprendre, format: chanson}\n")
+
+    with caplog.at_level("WARNING"):
+        source = load_sources(chemin)[0]
+
+    assert source.format == FORMAT_DEFAUT
+    assert "chanson" in caplog.text
+
+
+def test_horizon_jours_mal_type_est_ignore_sans_faire_lever(tmp_path, caplog):
+    """Même piège que `seuil_signal` laissé mal typé : comparé plus loin à un
+    nombre de jours, il lèverait hors de l'isolation de panne par source."""
+    chemin = _ecrire(tmp_path, "sources:\n  - {id: s, type: rss, url: u, langue: fr, registre: apprendre, horizon_jours: sept}\n")
+
+    with caplog.at_level("WARNING"):
+        source = load_sources(chemin)[0]
+
+    assert source.horizon_jours is None
+    assert "horizon_jours" in caplog.text
+
+
+def test_horizon_jours_nul_ou_negatif_est_rejete(tmp_path):
+    """Un horizon à 0 ou -3 ne décrit aucune fenêtre : il viderait la source."""
+    chemin = _ecrire(tmp_path, "sources:\n  - {id: a, type: rss, url: u, langue: fr, registre: apprendre, horizon_jours: 0}\n  - {id: b, type: rss, url: u, langue: fr, registre: apprendre, horizon_jours: -3}\n")
+
+    assert [s.horizon_jours for s in load_sources(chemin)] == [None, None]
+
+
+def test_horizon_jours_booleen_est_rejete(tmp_path):
+    """`horizon_jours: yes` vaut `True` en YAML 1.1 — donc un horizon d'un
+    jour, silencieusement."""
+    chemin = _ecrire(tmp_path, "sources:\n  - {id: s, type: rss, url: u, langue: fr, registre: apprendre, horizon_jours: yes}\n")
+
+    assert load_sources(chemin)[0].horizon_jours is None
+
+
+def test_nom_compose_d_espaces_est_ramene_a_vide(tmp_path):
+    """Truthy tel quel, il ferait afficher un blanc à la place de la source."""
+    chemin = _ecrire(tmp_path, "sources:\n  - {id: s, type: rss, url: u, langue: fr, registre: apprendre, nom: '   '}\n")
+
+    assert load_sources(chemin)[0].nom == ""

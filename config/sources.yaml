@@ -5,6 +5,21 @@
 #
 # Types disponibles : rss | json | scrape
 # Registres         : apprendre | ce_qui_bouge | pour_le_metier
+# Formats           : article | podcast | papier | video | release
+#
+# nom (audit du 2026-09-22) — libellé lisible affiché sur la page, à la place
+# de l'`id` technique. Absent : la page retombe sur l'`id`.
+#
+# format (audit du 2026-09-22) — nature du contenu, rendue sur la page : un
+# épisode de podcast de 50 minutes et une brève de 2 minutes ne demandent pas
+# le même engagement, et rien ne les distinguait jusqu'ici. Absent : `article`.
+#
+# horizon_jours (audit du 2026-09-22) — âge maximal d'un item de cette source
+# pour entrer dans le digest. Absent : l'horizon global de
+# `filter.HORIZON_FRAICHEUR_DEFAUT` (10 jours) s'applique. À relever pour une
+# source à cadence lente qui serait sinon systématiquement hors fenêtre :
+# relevé ci-dessous pour le podcast (30 j), les blogs irréguliers (21-60 j),
+# la chaîne vidéo (60 j) et les dépôts GitHub (30 j, releases espacées).
 #
 # priorite (optionnel, défaut 0) — départage le dédoublonnage : quand deux
 # sources relaient le même article, celle de plus haute priorité l'emporte.
@@ -38,6 +53,8 @@ sources:
     url: https://openai.com/news/rss.xml
     langue: en
     registre: ce_qui_bouge
+    nom: OpenAI
+    format: article
 
   - id: huggingface-blog
     priorite: 10
@@ -45,6 +62,8 @@ sources:
     url: https://huggingface.co/blog/feed.xml
     langue: en
     registre: apprendre
+    nom: Hugging Face
+    format: article
 
   # --- API JSON ------------------------------------------------------------
   # Le mapping décrit la forme de l'API : brancher une autre API JSON
@@ -55,6 +74,8 @@ sources:
     url: https://huggingface.co/api/daily_papers?limit=50
     langue: en
     registre: apprendre
+    nom: HF Daily Papers
+    format: papier
     # Médiane mesurée à 3 votes le jour du relevé (addendum du brief) ; 15
     # retenait 4 papiers sur 26 — la cible « 3-5 marquants » du PRD. Seuil
     # fixe volontairement simple pour cette story (Story 1.4 Dev Notes) ;
@@ -77,6 +98,9 @@ sources:
     url: https://www.anthropic.com/news
     langue: en
     registre: ce_qui_bouge
+    nom: Anthropic
+    format: article
+    horizon_jours: 30
     selecteur: /news/
     base_url: https://www.anthropic.com
 
@@ -98,6 +122,9 @@ sources:
     url: https://github.com/ggml-org/llama.cpp/releases.atom
     langue: en
     registre: apprendre
+    nom: llama.cpp
+    format: release
+    horizon_jours: 30
 
   - id: github-vllm
     priorite: 10
@@ -105,6 +132,9 @@ sources:
     url: https://github.com/vllm-project/vllm/releases.atom
     langue: en
     registre: apprendre
+    nom: vLLM
+    format: release
+    horizon_jours: 30
 
   - id: github-transformers
     priorite: 10
@@ -112,6 +142,9 @@ sources:
     url: https://github.com/huggingface/transformers/releases.atom
     langue: en
     registre: apprendre
+    nom: Transformers
+    format: release
+    horizon_jours: 30
 
   - id: github-ollama
     priorite: 10
@@ -119,6 +152,9 @@ sources:
     url: https://github.com/ollama/ollama/releases.atom
     langue: en
     registre: apprendre
+    nom: Ollama
+    format: release
+    horizon_jours: 30
 
   - id: eugene-yan
     priorite: 10
@@ -126,6 +162,9 @@ sources:
     url: https://eugeneyan.com/rss/
     langue: en
     registre: apprendre
+    nom: Eugene Yan
+    format: article
+    horizon_jours: 60
 
   - id: simon-willison
     priorite: 10
@@ -135,6 +174,9 @@ sources:
     url: https://simonwillison.net/atom/entries/
     langue: en
     registre: apprendre
+    nom: Simon Willison
+    format: article
+    horizon_jours: 21
 
   - id: statquest-youtube
     priorite: 10
@@ -142,6 +184,9 @@ sources:
     url: https://www.youtube.com/feeds/videos.xml?channel_id=UCtYLUTtgS3k1Fg4y5tAhLbw
     langue: en
     registre: apprendre
+    nom: StatQuest
+    format: video
+    horizon_jours: 60
 
   - id: datagen-podcast
     priorite: 10
@@ -153,6 +198,9 @@ sources:
     url: https://feeds.acast.com/public/shows/5fa58959e64011214fbf140d
     langue: fr
     registre: apprendre
+    nom: DataGen
+    format: podcast
+    horizon_jours: 30
 
   # --- Ce qui bouge (+3) -----------------------------------------------------
   - id: brief-ia
@@ -161,6 +209,8 @@ sources:
     url: https://www.briefia.fr/rss.xml
     langue: fr
     registre: ce_qui_bouge
+    nom: Brief IA
+    format: article
 
   - id: hacker-news
     # Sémantiquement un agrégateur (priorité 0 selon l'échelle ci-dessus),
@@ -176,6 +226,8 @@ sources:
     url: https://hn.algolia.com/api/v1/search_by_date?tags=story&numericFilters=points%3E100
     langue: en
     registre: ce_qui_bouge
+    nom: Hacker News
+    format: article
     # La réponse Algolia est un objet {"hits": [...], ...}, pas une liste à la
     # racine (contrairement à hf-daily-papers). Sans cette clé, json_connector
     # cherche une liste à la racine, n'en trouve pas et ignore la source
@@ -195,6 +247,8 @@ sources:
     url: https://tldr.tech/api/rss/ai
     langue: en
     registre: ce_qui_bouge
+    nom: TLDR AI
+    format: article
 
   # --- Pour le métier (+2) ---------------------------------------------------
   # Registre structurellement vide depuis la Story 1.5 (trouvé en revue,
@@ -205,6 +259,9 @@ sources:
     url: https://www.decideo.fr/xml/syndication.rss
     langue: fr
     registre: pour_le_metier
+    nom: Décideo
+    format: article
+    horizon_jours: 21
 
   - id: lemonde-informatique
     priorite: 10
@@ -221,3 +278,5 @@ sources:
     url: https://www.lemondeinformatique.fr/flux-rss/rss.xml
     langue: fr
     registre: pour_le_metier
+    nom: Le Monde Informatique
+    format: article

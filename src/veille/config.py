@@ -29,6 +29,14 @@ def chemin_config(nom: str) -> Path:
     return RACINE_PROJET / "config" / nom
 
 
+# Formats de contenu reconnus, rendus sur la page publiée (audit du
+# 2026-09-22). Volontairement fermé : un format inconnu dans `sources.yaml`
+# est une faute de frappe, et la laisser passer produirait une page muette
+# sur la nature réelle du contenu plutôt qu'un avertissement lisible.
+FORMATS_CONNUS = ("article", "podcast", "papier", "video", "release")
+FORMAT_DEFAUT = "article"
+
+
 @dataclass(frozen=True)
 class SourceConfig:
     """Descripteur d'une source déclarée dans `sources.yaml`.
@@ -55,6 +63,30 @@ class SourceConfig:
     # source qui n'en déclare pas voit tous ses items conservés — le
     # filtrage par signal n'est jamais implicite (AC2).
     seuil_signal: float | None = None
+
+    # --- Présentation et fraîcheur (audit du 2026-09-22) ---
+    # Nom lisible affiché sur la page publiée, à la place de l'`id`
+    # technique (« DataGen » plutôt que « datagen-podcast »). Optionnel :
+    # une source qui n'en déclare pas s'affiche sous son `id`, jamais sous
+    # une chaîne vide — le rendu ne doit jamais dépendre d'un champ
+    # facultatif renseigné.
+    nom: str = ""
+
+    # Nature du contenu servi par la source, rendue sur la page : un
+    # épisode de podcast de 50 minutes et une brève de 2 minutes ne
+    # demandent pas le même engagement, et rien ne les distinguait
+    # jusqu'ici (audit du 2026-09-22). Déclaré en configuration plutôt
+    # qu'inféré de l'URL ou du contenu : l'inférence se trompe en silence,
+    # la déclaration est vérifiable d'un coup d'œil (AD-3).
+    format: str = FORMAT_DEFAUT
+
+    # Âge maximal, en jours, d'un item de cette source pour entrer dans le
+    # digest du jour (FR-1, « les Items publiés depuis la dernière
+    # exécution »). Optionnel : sans valeur, l'horizon global de
+    # `filter.filtrer_par_fraicheur` s'applique. À relever pour une source
+    # à cadence lente (podcast bimensuel, blog irrégulier) dont les
+    # publications resteraient sinon systématiquement hors fenêtre.
+    horizon_jours: int | None = None
 
     # --- Spécifique aux sources JSON ---
     # Chemin vers la liste d'items dans la réponse (vide = la racine est la liste).
@@ -117,6 +149,7 @@ def _normaliser(entry: dict) -> dict:
     donc au prix de la nuit entière.
     """
     normalisee = dict(entry)
+    identifiant = normalisee.get("id", "?")
     brut = normalisee.get("seuil_signal")
 
     if brut is not None:
@@ -125,12 +158,72 @@ def _normaliser(entry: dict) -> dict:
             logger.warning(
                 "Source '%s' : seuil_signal invalide (%r) — seuil ignoré, "
                 "tous les items de cette source sont conservés.",
-                normalisee.get("id", "?"),
+                identifiant,
                 brut,
             )
         normalisee["seuil_signal"] = seuil
 
+    # `format` (audit du 2026-09-22) : une valeur hors de `FORMATS_CONNUS`
+    # retombe sur le défaut avec un avertissement nommant les valeurs
+    # acceptées — jamais rendue telle quelle sur la page, où elle
+    # produirait une pastille vide ou un libellé incompréhensible.
+    brut_format = normalisee.get("format")
+    if brut_format is not None:
+        format_normalise = str(brut_format).strip().lower()
+        if format_normalise not in FORMATS_CONNUS:
+            logger.warning(
+                "Source '%s' : format inconnu (%r) — repli sur '%s'. "
+                "Valeurs acceptées : %s.",
+                identifiant,
+                brut_format,
+                FORMAT_DEFAUT,
+                ", ".join(FORMATS_CONNUS),
+            )
+            format_normalise = FORMAT_DEFAUT
+        normalisee["format"] = format_normalise
+
+    # `horizon_jours` (audit du 2026-09-22) : même piège que `seuil_signal`
+    # laissé mal typé — un `horizon_jours: sept` comparé plus loin à un
+    # nombre de jours lèverait une `TypeError` hors de l'isolation par
+    # source. Un horizon nul ou négatif écarterait par ailleurs la totalité
+    # des items de la source sans le moindre signe : rejeté ici aussi.
+    brut_horizon = normalisee.get("horizon_jours")
+    if brut_horizon is not None:
+        horizon = to_entier_positif(brut_horizon)
+        if horizon is None:
+            logger.warning(
+                "Source '%s' : horizon_jours invalide (%r) — horizon global "
+                "appliqué à cette source.",
+                identifiant,
+                brut_horizon,
+            )
+        normalisee["horizon_jours"] = horizon
+
+    # `nom` (audit du 2026-09-22) : normalisé en chaîne nettoyée — un `nom:`
+    # laissé vide, ou composé d'espaces seuls, doit retomber sur l'`id`
+    # plutôt que d'afficher un blanc sur la page (même piège de « clé
+    # blanche » que `_jeton_depuis_env`, trouvé en revue de la Story 1.6).
+    brut_nom = normalisee.get("nom")
+    if brut_nom is not None:
+        normalisee["nom"] = str(brut_nom).strip()
+
     return normalisee
+
+
+def to_entier_positif(valeur: Any) -> int | None:
+    """Convertit en entier strictement positif, ou `None`.
+
+    Mêmes rejets que `to_float_fini` (booléens, `nan`/`inf`), plus le rejet
+    des valeurs nulles ou négatives : un horizon de fraîcheur à 0 ou -3 ne
+    décrit aucune fenêtre exploitable, il viderait simplement la source.
+    Une valeur fractionnaire (`7.5`) est tronquée vers l'entier inférieur
+    plutôt que rejetée — l'intention reste lisible, contrairement à une
+    faute de frappe alphabétique.
+    """
+    nombre = to_float_fini(valeur)
+    if nombre is None or nombre < 1:
+        return None
+    return int(nombre)
 
 
 def to_float_fini(valeur: Any) -> float | None:

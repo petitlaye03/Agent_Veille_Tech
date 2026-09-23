@@ -703,9 +703,9 @@ def test_executer_filtre_les_items_deja_marques_vus_lors_d_une_relance(tmp_path,
     entrees_captees = []
     rendre_original = pipeline.rendre
 
-    def _rendre_espion(entrees, maintenant):
+    def _rendre_espion(entrees, maintenant, sources=None):
         entrees_captees.append(list(entrees))
-        return rendre_original(entrees, maintenant)
+        return rendre_original(entrees, maintenant, sources)
 
     monkeypatch.setattr(pipeline, "rendre", _rendre_espion)
 

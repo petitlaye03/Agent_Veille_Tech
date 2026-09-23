@@ -15,6 +15,7 @@ emprunter le chemin réel depuis `sources.yaml`.
 
 import json
 import textwrap
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from veille.collect import collecter
@@ -618,3 +619,71 @@ class TestVisibiliteDuTriExcessif:
         assert "doublon(s) écarté(s)" in resume
         assert "absorbés par" in resume
         assert "gagnante" in resume
+
+
+# --- Audit du 2026-09-22 : la fraîcheur, sur le chemin réel -----------
+# Même raison d'être que le reste de ce fichier : `filtrer_par_fraicheur`
+# est couverte unitairement dans `test_filter.py`, mais rien ne prouverait
+# qu'elle est réellement **branchée** dans `collecter()`. Le `conftest`
+# neutralise l'horizon global pour toute la suite (fixtures à dates figées) :
+# ces tests-ci le re-substituent explicitement.
+
+
+def _socle_date(tmp_path: Path, publication: str) -> Path:
+    """Un flux RSS d'un seul item, à la date voulue."""
+    flux = tmp_path / "flux.xml"
+    flux.write_text(
+        "<?xml version='1.0'?><rss version='2.0'><channel><title>T</title>"
+        "<item><title>Unique</title><link>https://exemple.invalid/a</link>"
+        f"<guid>a</guid><pubDate>{publication}</pubDate></item>"
+        "</channel></rss>",
+        encoding="utf-8",
+    )
+    return _socle(
+        tmp_path,
+        f"""
+        sources:
+          - id: source-datee
+            type: rss
+            url: {flux.as_posix()}
+            langue: fr
+            registre: apprendre
+        """,
+    )
+
+
+def test_collecter_ecarte_reellement_un_item_trop_ancien(tmp_path, monkeypatch):
+    """Le bug d'origine : un run réel a publié quatre items de plus de
+    200 jours parce qu'aucune étape ne regardait `date_publication`."""
+    monkeypatch.setattr("veille.filter.HORIZON_FRAICHEUR_DEFAUT", 10)
+    socle = _socle_date(tmp_path, "Mon, 02 Feb 2026 08:00:00 +0000")
+
+    resultat = collecter(socle)
+
+    assert resultat.items == []
+    assert resultat.fraicheur.ecartes_par_source == {"source-datee": 1}
+
+
+def test_collecter_conserve_un_item_recent(tmp_path, monkeypatch):
+    """Non-régression : le filtre ne doit pas vider le digest du cas normal."""
+    monkeypatch.setattr("veille.filter.HORIZON_FRAICHEUR_DEFAUT", 10)
+    recent = (datetime.now(timezone.utc) - timedelta(days=2)).strftime(
+        "%a, %d %b %Y %H:%M:%S +0000"
+    )
+    socle = _socle_date(tmp_path, recent)
+
+    resultat = collecter(socle)
+
+    assert [i.guid for i in resultat.items] == ["a"]
+    assert resultat.fraicheur.total_ecartes == 0
+
+
+def test_le_resume_de_collecte_nomme_la_fraicheur(tmp_path, monkeypatch):
+    """Une perte invisible au récapitulatif est indiscernable d'une nuit
+    calme — c'est la leçon fondatrice de ce fichier."""
+    monkeypatch.setattr("veille.filter.HORIZON_FRAICHEUR_DEFAUT", 10)
+    socle = _socle_date(tmp_path, "Mon, 02 Feb 2026 08:00:00 +0000")
+
+    resume = collecter(socle).resume()
+
+    assert "hors fenêtre" in resume

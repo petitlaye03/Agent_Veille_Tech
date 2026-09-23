@@ -18,6 +18,7 @@ import logging
 import re
 from collections import Counter
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
@@ -89,6 +90,129 @@ def _ventilation(comptes: dict[str, int]) -> str:
     return ", ".join(
         f"{cle} (-{n})"
         for cle, n in sorted(comptes.items(), key=lambda x: (-x[1], x[0]))
+    )
+
+
+# Âge maximal, en jours, d'un item pour entrer dans le digest du jour
+# (audit du 2026-09-22). Le PRD demande depuis toujours « les Items publiés
+# depuis la dernière exécution » (FR-1) : jusqu'à cet audit, aucune étape du
+# pipeline ne regardait `Item.date_publication`, et le classement par
+# affinité au profil faisait remonter des articles vieux de plusieurs mois
+# à égalité avec l'actualité du jour — un run réel du 2026-09-22 a publié
+# quatre items de plus de 200 jours sur huit. Pire, seuls les items publiés
+# étant marqués « déjà vus », le pipeline aurait digéré l'archive complète
+# de chaque source à raison de huit items par nuit pendant des mois.
+#
+# Valeur globale, surchargeable par source (`SourceConfig.horizon_jours`,
+# AD-3) : une source à cadence lente (podcast bimensuel, blog irrégulier)
+# se verrait sinon systématiquement écartée alors qu'elle publie
+# normalement.
+HORIZON_FRAICHEUR_DEFAUT = 10
+
+
+@dataclass(frozen=True)
+class RapportFraicheur:
+    """Ce que le filtre de fraîcheur a écarté, par source — même patron que
+    `RapportFiltrageSignal` (Story 1.4).
+
+    `ages_retenus` sert le diagnostic inverse du compte d'écartés : une nuit
+    où tout est retenu mais où les âges retenus sont tous proches de
+    l'horizon signale un socle qui ralentit, pas un filtre trop serré.
+    """
+
+    ecartes_par_source: dict[str, int] = field(default_factory=dict)
+    ages_retenus: tuple[int, ...] = ()
+
+    @property
+    def total_ecartes(self) -> int:
+        return sum(self.ecartes_par_source.values())
+
+    def resume(self) -> str:
+        if not self.total_ecartes and not self.ages_retenus:
+            return "Fraîcheur : aucun item daté à évaluer."
+
+        if self.total_ecartes:
+            base = (
+                f"Fraîcheur : {self.total_ecartes} item(s) hors fenêtre — "
+                f"{_ventilation(self.ecartes_par_source)}"
+            )
+        else:
+            base = "Fraîcheur : aucun item hors fenêtre"
+        if self.ages_retenus:
+            base += (
+                f" — âges retenus min {min(self.ages_retenus)}j / "
+                f"max {max(self.ages_retenus)}j / "
+                f"médian {sorted(self.ages_retenus)[len(self.ages_retenus) // 2]}j"
+            )
+        return base
+
+
+def filtrer_par_fraicheur(
+    items: list[Item],
+    sources: dict[str, SourceConfig],
+    maintenant: datetime | None = None,
+    horizon_defaut: int | None = None,
+) -> tuple[list[Item], RapportFraicheur]:
+    """Écarte les items publiés il y a plus longtemps que leur horizon (FR-1).
+
+    L'horizon appliqué est celui de la source (`horizon_jours`) quand elle
+    en déclare un, sinon `horizon_defaut` — même patron de surcharge par
+    source que `seuil_signal` dans `filtrer_par_signal`.
+
+    Deux garde-fous, dans le même esprit que `filtrer_par_signal` (l'absence
+    de donnée n'est jamais une insuffisance) :
+
+    - **Un item daté dans le futur est conservé.** Une horloge de source
+      en avance, ou un fuseau mal déclaré, ne doit pas faire disparaître du
+      contenu légitime — et `health.py` signale déjà ces sources par
+      ailleurs (Story 4.2). Le conserver est le choix qui ne perd rien.
+    - **Un item dont la date n'a pas pu être lue est conservé**, puisque les
+      connecteurs lui posent l'heure de collecte par défaut : il paraît
+      publié aujourd'hui, donc frais. C'est une limite connue et déjà
+      journalisée par `collect.py` (« aucune date exploitable sur N
+      item(s) ») pour cinq des dix-sept sources du socle — elle rend le
+      filtre inopérant sur ces sources-là, jamais destructeur.
+
+    `horizon_defaut` est résolu **à l'appel** et non à l'import (même
+    convention que les chemins de configuration de `collecter()`) : lié par
+    défaut au moment de la définition, `HORIZON_FRAICHEUR_DEFAUT` ne serait
+    plus substituable par un test, qui n'a aucun moyen de re-lier une valeur
+    déjà capturée dans la signature.
+
+    Ne lève jamais : `Item` garantit une `date_publication` en UTC et
+    « timezone-aware » (`models.py`), et un `maintenant` naïf fourni par un
+    appelant est ramené en UTC plutôt que de faire lever la soustraction au
+    milieu du pipeline, hors de toute isolation de panne.
+    """
+    if horizon_defaut is None:
+        horizon_defaut = HORIZON_FRAICHEUR_DEFAUT
+    if maintenant is None:
+        maintenant = datetime.now(timezone.utc)
+    elif maintenant.tzinfo is None:
+        logger.warning(
+            "filtrer_par_fraicheur : `maintenant` reçu sans fuseau — "
+            "interprété en UTC (convention de `models.Item`)."
+        )
+        maintenant = maintenant.replace(tzinfo=timezone.utc)
+
+    retenus: list[Item] = []
+    ecartes: Counter[str] = Counter()
+    ages: list[int] = []
+
+    for item in items:
+        source = sources.get(item.source_id)
+        horizon = source.horizon_jours if source and source.horizon_jours else horizon_defaut
+        age_jours = (maintenant - item.date_publication).days
+
+        if age_jours > horizon:
+            ecartes[item.source_id] += 1
+            continue
+
+        retenus.append(item)
+        ages.append(max(age_jours, 0))
+
+    return retenus, RapportFraicheur(
+        ecartes_par_source=dict(ecartes), ages_retenus=tuple(ages)
     )
 
 
@@ -460,6 +584,15 @@ class Quotas:
     ce_qui_bouge: int = 3
     pour_le_metier: int = 2
 
+    # Plafond d'entrées qu'une même source peut occuper dans un registre
+    # donné (audit du 2026-09-22). Les quotas ne plafonnaient que par
+    # registre : un run réel du 2026-09-22 a rempli la totalité de la
+    # section « Apprendre » avec trois épisodes du même podcast, et n'a
+    # publié que quatre sources distinctes sur dix-sept. `0` ou absent
+    # désactive le plafond (aucune régression pour une configuration
+    # existante qui ne le déclare pas).
+    max_par_source: int = 0
+
 
 # Ordre canonique des registres — utilisé pour les quotas ici, et réutilisé
 # tel quel par `render.py` (Story 1.8) pour l'ordre d'affichage des sections
@@ -510,6 +643,15 @@ def charger_quotas(chemin: str | Path = DEFAULT_QUOTAS_PATH) -> Quotas:
         nom: _quota(categories, nom, getattr(defauts, nom), chemin)
         for nom in CHAMPS_QUOTAS
     }
+
+    # `max_par_source` est déclaré à la racine du fichier, pas sous
+    # `quotas:` (audit du 2026-09-22) — il ne nomme pas un registre, et le
+    # placer parmi eux le ferait signaler comme registre inconnu par
+    # `_avertir_cles_inconnues`. Même disposition que `seuil_bruit` dans
+    # `scoring.yaml`, pour la même raison.
+    valeurs["max_par_source"] = _quota(
+        brut, "max_par_source", defauts.max_par_source, chemin
+    )
     return Quotas(**valeurs)
 
 
@@ -569,9 +711,11 @@ def repartir_par_quotas(classement: list[ItemScore], quotas: Quotas) -> list[Ite
     Story 1.4 (AC2).
     """
     limites = {nom: getattr(quotas, nom) for nom in CHAMPS_QUOTAS}
+    plafond_source = quotas.max_par_source or None
 
     retenus: list[ItemScore] = []
     comptes: Counter[str] = Counter()
+    comptes_source: Counter[tuple[str, str]] = Counter()
     avertis: set[str] = set()
 
     for item_score in classement:
@@ -598,9 +742,24 @@ def repartir_par_quotas(classement: list[ItemScore], quotas: Quotas) -> list[Ite
             retenus.append(item_score)
             continue
 
-        if comptes[registre] < limite:
-            retenus.append(item_score)
-            comptes[registre] += 1
+        if comptes[registre] >= limite:
+            continue
+
+        # Plafond par source (audit du 2026-09-22), appliqué **après** la
+        # limite de registre et **avant** de consommer une place : compté
+        # par couple (registre, source) et non par source seule, pour qu'une
+        # source rattachée à deux registres ne se prive pas elle-même d'un
+        # registre en remplissant l'autre. Le classement arrivant déjà trié,
+        # sauter un item revient à laisser la place au suivant le mieux
+        # noté — jamais à laisser la place vide.
+        if plafond_source is not None:
+            cle = (registre, item_score.item.source_id)
+            if comptes_source[cle] >= plafond_source:
+                continue
+            comptes_source[cle] += 1
+
+        retenus.append(item_score)
+        comptes[registre] += 1
 
     return retenus
 

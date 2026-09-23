@@ -190,3 +190,47 @@ def test_le_socle_couvre_le_registre_pour_le_metier(socle):
         "aucune source ne déclare 'registre: pour_le_metier' — la dette "
         "rouverte, ce registre resterait vide dans tout digest produit"
     )
+
+
+# --- Audit du 2026-09-22 : métadonnées d'affichage du socle livré -----
+
+
+def test_chaque_source_declare_un_nom_lisible(socle):
+    """Sans `nom`, la page affiche l'`id` technique (« datagen-podcast »)
+    au lieu du nom réel de la source (« DataGen ») — dégradation prévue,
+    mais jamais souhaitable sur le socle livré."""
+    sans_nom = [s.id for s in socle if not s.nom]
+
+    assert sans_nom == [], f"sources sans nom lisible : {sans_nom}"
+
+
+def test_chaque_source_declare_un_format(socle):
+    """Le format n'est jamais deviné : il distingue sur la page un épisode
+    de podcast de 50 minutes d'une brève de 2 minutes."""
+    from veille.config import FORMATS_CONNUS
+
+    invalides = [(s.id, s.format) for s in socle if s.format not in FORMATS_CONNUS]
+
+    assert invalides == [], f"formats inconnus : {invalides}"
+
+
+def test_les_sources_a_cadence_lente_declarent_un_horizon_plus_large(socle):
+    """Garde-fou sur l'effet de bord du filtre de fraîcheur : podcast,
+    chaîne vidéo et blogs irréguliers publient moins souvent que l'horizon
+    global de 10 jours — sans surcharge, ils ne paraîtraient jamais."""
+    # Plancher en dur, volontairement : `conftest.py` neutralise
+    # `HORIZON_FRAICHEUR_DEFAUT` pour toute la suite (les fixtures portent
+    # des dates figées), donc l'importer ici rendrait la comparaison
+    # inopérante. 21 jours est nettement au-dessus de l'horizon global réel
+    # (10 jours) : ce test garde l'existence de la surcharge, pas sa valeur.
+    PLANCHER = 21
+
+    lentes = {"datagen-podcast", "statquest-youtube", "eugene-yan"}
+    par_id = {s.id: s for s in socle}
+
+    for identifiant in lentes & set(par_id):
+        horizon = par_id[identifiant].horizon_jours
+        assert horizon and horizon >= PLANCHER, (
+            f"'{identifiant}' publie rarement : sans horizon élargi "
+            f"(>= {PLANCHER} j), il ne paraîtrait jamais sur la page"
+        )

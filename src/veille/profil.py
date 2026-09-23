@@ -22,17 +22,23 @@ DEFAULT_PROFIL_PATH = chemin_config("profil.md")
 # -> catégorie de score qu'il alimente. Préfixe et non égalité stricte :
 # Abdoulaye doit pouvoir reformuler la fin d'un titre sans casser le
 # parseur (Dev Notes).
+# Section de prose, collectée telle quelle (audit du 2026-09-22) plutôt
+# qu'ignorée : ses lignes ne sont pas des mots-clés (aucun score) mais
+# décrivent le lecteur, ce dont `enrich/llm.py` a besoin pour rédiger.
+_SECTION_POSTURE = "posture"
+
 _CATEGORIES_PAR_PREFIXE = {
     "themes prioritaires": "prioritaire",
     "signal fort": "signal_fort",
     "domaines d'application": "domaine",
     "themes secondaires": "secondaire",
     "bruit": "bruit",
+    "posture": _SECTION_POSTURE,
 }
 
-# Section connue mais qui ne porte pas de mots-clés (prose) : ignorée sans
-# avertissement, à la différence d'un titre réellement inconnu.
-_SECTIONS_IGNOREES = ("posture",)
+# Sections connues qui ne portent ni mots-clés ni prose exploitable :
+# ignorées sans avertissement, à la différence d'un titre inconnu.
+_SECTIONS_IGNOREES = ()
 
 # Commentaire italique entre parenthèses (« *(...)* ») : de la prose, jamais
 # des mots-clés — retiré avant toute extraction. Non gourmand, sans quoi un
@@ -78,6 +84,15 @@ class Profil:
     secondaire: tuple[str, ...] = ()
     bruit: tuple[str, ...] = ()
 
+    # Prose de la section « Posture » (audit du 2026-09-22) : qui lit la
+    # page, ce qu'il cherche, à quel niveau. Sert exclusivement à
+    # `enrich/llm.py`, qui rédigeait jusqu'ici ses accroches sans rien
+    # savoir du lecteur — d'où des textes de communiqué de presse,
+    # interchangeables d'un article à l'autre. Ne participe **pas** au
+    # score (ce n'est pas un mot-clé) ni à `est_vide`, qui continue de ne
+    # décrire que la neutralisation du classement.
+    posture: tuple[str, ...] = ()
+
     @property
     def est_vide(self) -> bool:
         return not (
@@ -108,6 +123,7 @@ def charger_profil(chemin: str | Path = DEFAULT_PROFIL_PATH) -> Profil:
 
 def _analyser(texte: str) -> Profil:
     mots_cles: dict[str, list[str]] = {c: [] for c in set(_CATEGORIES_PAR_PREFIXE.values())}
+    posture: list[str] = []
     categorie_courante: str | None = None
 
     texte = _COMMENTAIRE_HTML.sub("", texte)
@@ -121,6 +137,11 @@ def _analyser(texte: str) -> Profil:
             niveau = len(depouillee) - len(depouillee.lstrip("#"))
             titre = depouillee.lstrip("#").strip()
             categorie_courante = _categorie(titre) if niveau in (2, 3) else None
+            continue
+        if categorie_courante == _SECTION_POSTURE:
+            phrase = _depouiller_puce(ligne)
+            if phrase:
+                posture.append(phrase)
             continue
         if categorie_courante is None:
             continue
@@ -137,6 +158,7 @@ def _analyser(texte: str) -> Profil:
         domaine=tuple(mots_cles["domaine"]),
         secondaire=tuple(mots_cles["secondaire"]),
         bruit=tuple(mots_cles["bruit"]),
+        posture=tuple(posture),
     )
 
     if profil.est_vide:
@@ -149,6 +171,20 @@ def _analyser(texte: str) -> Profil:
         )
 
     return profil
+
+
+def _depouiller_puce(ligne: str) -> str:
+    """Réduit une ligne de prose Markdown à sa phrase nue.
+
+    Retire la puce, l'emphase (`**`/`*`) et les apartés entre parenthèses
+    italiques : ce texte part dans un prompt (`enrich/llm.py`), où la
+    syntaxe Markdown n'est que du bruit de jetons facturés.
+    """
+    texte = _ASIDE_ITALIQUE.sub("", ligne)
+    texte = _PUCE.sub("", texte).replace("**", "")
+    # Espaces recollés : retirer un aparté en milieu de phrase en laisse
+    # deux côte à côte, qui partiraient tels quels dans le prompt.
+    return " ".join(texte.split())
 
 
 def _categorie(titre: str) -> str | None:

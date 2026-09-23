@@ -1,4 +1,16 @@
-# Veille tech — {{ date_generation.strftime("%d/%m/%Y") }}
+{#-
+  Archive Markdown datée (FR-10, Story 1.9).
+
+  Enrichie par l'audit du 2026-09-22 : la source et la date de publication y
+  manquaient autant que sur la page HTML, alors que FR-7 les exige (« Chaque
+  Entrée affiche sa Source ») et que l'archive est précisément ce qu'on
+  relit des mois plus tard, quand plus rien ne permet de resituer un article.
+
+  Échappement Markdown **explicite** via `| markdown_safe` (jamais
+  l'autoescaping HTML, cf. `render._environnement_jinja_markdown`) sur tout
+  champ issu d'une source externe.
+-#}
+# Veille tech — {{ date_lisible }}
 
 _Généré le {{ date_generation.strftime("%d/%m/%Y à %H:%M") }} (heure de Dakar)_
 {% if digest_vide %}
@@ -8,15 +20,15 @@ Rien à signaler ce jour-là — retour le lendemain.
 {%- if entrees_section %}
 
 ## {{ libelle | markdown_safe }}
-{% for entree in entrees_section %}
-{%- set titre_affiche = (entree.item.titre if entree.item.titre else entree.accroche) | markdown_safe -%}
-{%- set lien = url_surs(entree.item.url) -%}
-- {% if entree.recommandee %}★ **À NE PAS MANQUER** — {% endif -%}
-{%- if lien -%}
-[{{ titre_affiche }}](<{{ lien }}>)
+{% for e in entrees_section %}
+{%- set titre = e.titre | markdown_safe -%}
+- {% if e.recommandee %}★ **À NE PAS MANQUER** — {% endif -%}
+{%- if e.url -%}
+[{{ titre }}](<{{ e.url }}>)
 {%- else -%}
-{{ titre_affiche }}
-{%- endif %} — {{ entree.accroche | markdown_safe }}
+{{ titre }}
+{%- endif %} — {{ e.accroche | markdown_safe }}
+  _{{ e.nom_source | markdown_safe }} · {{ e.libelle_format | markdown_safe }} · {{ e.date_lisible }}_
 {% endfor %}
 {%- endif %}
 {%- endfor %}

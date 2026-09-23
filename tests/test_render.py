@@ -1,7 +1,7 @@
 """Tests du rendu HTML (FR-9, Story 1.8) — aucun appel réseau, tout est local."""
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from veille.models import Entree, Item
 from veille.render import BANDEAU_ECHEC_DEBUT, BANDEAU_ECHEC_FIN, rendre, rendre_bandeau_echec, rendre_markdown
@@ -89,10 +89,14 @@ def test_rendre_marque_l_entree_recommandee():
 
     html = rendre([recommandee, normale], DATE_GEN)
 
-    # Exactement une marque distincte, pour l'entrée recommandée seulement.
-    # Recherche l'usage de la classe dans un attribut `class=`, pas la
-    # simple sous-chaîne (qui matcherait aussi la règle CSS du <style>).
-    assert html.count('class="entree entree--recommandee"') == 1
+    # L'entrée recommandée tient seule la « une » depuis l'audit du
+    # 2026-09-22 : sortie de sa section et coiffée d'une mention dédiée, au
+    # lieu de porter un simple badge au milieu des autres.
+    assert html.count('<section class="une ') == 1
+    assert html.count('<p class="une-mention">') == 1
+    # Et elle n'est pas rendue deux fois : une « une » dupliquée dans sa
+    # section se lirait comme un doublon, pas comme une mise en avant.
+    assert html.count("Recommandée") == 1
 
 
 def test_rendre_echappe_le_contenu_malveillant():
@@ -495,3 +499,126 @@ def test_rendre_a_decouvrir_candidat_manquant_leve():
 
     with pytest.raises(ValueError):
         rendre_a_decouvrir(None)
+
+
+# --- Audit du 2026-09-22 : source, date et format sur la page ---------
+# FR-7 (« Chaque Entrée affiche sa Source ») et UX-DR2 exigeaient la source
+# depuis le début ; l'AC1 de la Story 1.8 l'avait perdue en route, et aucune
+# des vingt et une revues suivantes ne l'a rattrapée.
+
+
+def _sources(**kw):
+    from veille.config import SourceConfig
+
+    return {
+        "s": SourceConfig(
+            id="s", type="rss", url="u", langue="fr", registre="apprendre", **kw
+        )
+    }
+
+
+def test_rendre_affiche_le_nom_lisible_de_la_source():
+    html = rendre([_entree(titre="T")], DATE_GEN, _sources(nom="DataGen"))
+
+    assert "DataGen" in html
+
+
+def test_rendre_se_replie_sur_l_identifiant_quand_la_source_n_a_pas_de_nom():
+    """Un `nom:` absent, vide ou composé d'espaces ne doit jamais produire
+    un blanc à la place de la source."""
+    html = rendre([_entree(titre="T")], DATE_GEN, _sources(nom="   "))
+
+    assert ">s<" in html
+
+
+def test_rendre_se_replie_sur_l_identifiant_sans_configuration_de_source():
+    """`rendre()` reste appelable sans index de sources (tests, appelants
+    antérieurs à l'audit) : la page dégrade sur l'`id`, jamais sur rien."""
+    html = rendre([_entree(titre="T")], DATE_GEN)
+
+    assert ">s<" in html
+
+
+def test_rendre_affiche_le_format_declare_par_la_source():
+    html = rendre([_entree(titre="T")], DATE_GEN, _sources(format="podcast"))
+
+    assert "Podcast" in html
+    assert "<svg" in html
+
+
+def test_rendre_format_inconnu_se_replie_sur_article():
+    """Atteignable hors `load_sources`, qui normalise déjà : un appelant peut
+    construire un `SourceConfig` à la main."""
+    html = rendre([_entree(titre="T")], DATE_GEN, _sources(format="chanson"))
+
+    assert "Article" in html
+
+
+def test_rendre_affiche_la_date_de_publication_de_chaque_entree():
+    """Sans elle, un article vieux de sept mois a exactement la même tête
+    qu'une annonce du jour — c'est ce qui se passait avant l'audit."""
+    html = rendre([_entree(titre="T")], DATE_GEN, _sources())
+
+    assert 'datetime="2026-08-28"' in html
+    assert 'title="28 août 2026"' in html
+    # L'apostrophe est échappée par l'autoescaping (AC8) : chercher la
+    # forme littérale passerait à côté de ce qui est réellement publié.
+    assert "aujourd&#39;hui" in html
+
+
+def test_rendre_signale_visuellement_une_entree_ancienne():
+    vieux = Entree(
+        item=Item(
+            source_id="s",
+            guid="v",
+            titre="Vieux",
+            date_publication=datetime(2026, 2, 1, tzinfo=timezone.utc),
+            langue="fr",
+            registre="apprendre",
+            url="https://example.invalid/v",
+            contenu_brut="",
+        ),
+        accroche="Accroche.",
+    )
+
+    html = rendre([vieux], DATE_GEN, _sources())
+
+    assert "age--ancien" in html
+    assert "il y a 6 mois" in html
+
+
+def test_libelle_age_couvre_les_paliers():
+    from veille.render import _libelle_age
+
+    base = datetime(2026, 9, 22, 12, 0, tzinfo=timezone.utc)
+    paliers = {0: "aujourd'hui", 1: "hier", 3: "il y a 3 jours",
+               14: "il y a 2 semaines", 90: "il y a 3 mois"}
+    for jours, attendu in paliers.items():
+        assert _libelle_age(base - timedelta(days=jours), base)[0] == attendu
+
+
+def test_libelle_age_d_une_date_future_reste_lisible():
+    from veille.render import _libelle_age
+
+    base = datetime(2026, 9, 22, 12, 0, tzinfo=timezone.utc)
+
+    assert _libelle_age(base + timedelta(days=2), base) == ("aujourd'hui", 0)
+
+
+def test_date_lisible_ne_depend_pas_de_la_locale_du_systeme():
+    """`strftime("%B")` rendrait « September » sur un runner GitHub Actions,
+    dont la locale est C/POSIX — invisible depuis une machine en français."""
+    from veille.render import _date_lisible
+
+    assert _date_lisible(datetime(2026, 9, 22, tzinfo=timezone.utc)) == "22 septembre 2026"
+    assert _date_lisible(datetime(2026, 9, 22, tzinfo=timezone.utc), avec_jour=True).startswith("mardi ")
+
+
+def test_rendre_markdown_affiche_la_source_et_la_date():
+    """L'archive est ce qu'on relit des mois plus tard, quand plus rien ne
+    permet de resituer un article."""
+    md = rendre_markdown([_entree(titre="T")], DATE_GEN, _sources(nom="DataGen", format="podcast"))
+
+    assert "DataGen" in md
+    assert "Podcast" in md
+    assert "28 août 2026" in md

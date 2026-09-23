@@ -1,131 +1,324 @@
+{#- ------------------------------------------------------------------ -#}
+{#- Macro d'entrée : elle sert la « une » et les sections, qui ne        -#}
+{#- doivent jamais diverger dans leur rendu. Définie en tête parce que   -#}
+{#- Jinja2 lie une macro au moment où il rencontre sa définition — la    -#}
+{#- placer en fin de fichier la rendrait introuvable à l'appel.          -#}
+{#- ------------------------------------------------------------------ -#}
+{%- macro entree(e) -%}
+      <article class="entree">
+        <h3 class="entree-titre">
+          {%- if e.url -%}
+          <a href="{{ e.url }}" rel="noopener noreferrer">{{ e.titre }}</a>
+          {%- else -%}
+          {{ e.titre }}
+          {%- endif -%}
+        </h3>
+        <p class="entree-accroche">{{ e.accroche }}</p>
+        <p class="entree-meta">
+          <span class="source">{{ e.nom_source }}</span>
+          <span class="sep">·</span>
+          {#- `pictogramme` provient de `render.FORMATS`, une constante du
+              dépôt — jamais d'une source externe. C'est la seule marque
+              `|safe` de ce gabarit, et elle ne doit jamais être étendue à
+              un champ issu d'un flux (AC8 de la Story 1.8). -#}
+          <span class="format"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">{{ e.pictogramme | safe }}</svg>{{ e.libelle_format }}</span>
+          <span class="sep">·</span>
+          <time datetime="{{ e.date_iso }}" title="{{ e.date_lisible }}"
+                class="{{ 'age--ancien' if e.est_ancienne else '' }}">{{ e.age }}</time>
+        </p>
+      </article>
+{%- endmacro -%}
+{#
+  Gabarit de la page publiée (FR-9, NFR6, UX-DR1 à UX-DR5).
+
+  Refonte éditoriale du 2026-09-22 (audit) : la version précédente tenait la
+  lettre de NFR6 (une palette, une police) mais pas son esprit (« soignée,
+  travaillée, plaisante »), et n'affichait ni la source (pourtant exigée par
+  FR-7 et UX-DR2), ni la date de publication, ni la nature du contenu.
+
+  Trois contraintes à ne pas perdre de vue en modifiant ce fichier :
+
+  1. `publish._inserer_fragment` insère les panneaux (bandeau d'échec,
+     récapitulatif de santé, « À découvrir ») **juste après `<body>`** — donc
+     avant le bandeau-titre. C'est pourquoi la mise en page (largeur maximale,
+     gouttières) est portée par `body` lui-même et non par un conteneur
+     intérieur : sans cela, ces panneaux s'afficheraient pleine largeur, collés
+     aux bords de l'écran.
+  2. Les variables `--bandeau-echec-*`, `--recapitulatif-*` et `--a-decouvrir-*`
+     sont référencées par des fragments HTML produits ailleurs (`render.py`) et
+     injectés dans une page déjà publiée : les renommer casserait des pages
+     déjà en ligne, jamais re-rendues.
+  3. Zéro JavaScript, zéro requête réseau (polices système uniquement) : la
+     page doit s'afficher instantanément sur un téléphone, en 4G, à 7h38.
+-#}
 <!doctype html>
 <html lang="fr">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="Veille quotidienne IA, data et tech — l'essentiel du jour, en français.">
 <title>Veille tech — le digest du jour</title>
 <style>
   :root {
-    --bg: #fafafa;
-    --fg: #1a1a1a;
-    --accent: #2b6cb0;
-    --muted: #666666;
-    --card-bg: #ffffff;
-    --border: #e2e2e2;
-    --recommandee-bg: #fff8e1;
-    --recommandee-border: #d9a520;
+    --papier: #faf8f5;
+    --surface: #ffffff;
+    --encre: #1a1815;
+    --encre-2: #4a453e;
+    --encre-3: #857f74;
+    --filet: #e4dfd6;
+    --accent: #a33a2a;
+    --lien: #1c4f73;
+    --attention: #8a5a12;
+
+    /* Un accent par registre : la couleur situe la section d'un coup d'œil
+       pendant le défilement, sans ajouter le moindre libellé. */
+    --reg-apprendre: #2f5d8c;
+    --reg-ce_qui_bouge: #a33a2a;
+    --reg-pour_le_metier: #45704a;
+
     /* Bandeau d'échec (Story 3.2) — injecté après coup par
-       publish.py::_inserer_bandeau sur une page déjà publiée : ces
-       variables doivent donc rester stables, jamais renommées sans
-       adapter render.py::rendre_bandeau_echec en même temps. */
-    --bandeau-echec-bg: #f9d7d5;
-    --bandeau-echec-fg: #7a1f1f;
-    /* Récapitulatif des sources à surveiller (Story 4.3) — même
-       principe que le bandeau d'échec ci-dessus : injecté après coup par
-       publish.py::_inserer_fragment, variables à garder stables. */
-    --recapitulatif-bg: #fff4d6;
+       publish.py::_inserer_fragment sur une page déjà publiée : ces
+       variables doivent rester stables, jamais renommées sans adapter
+       render.py::rendre_bandeau_echec en même temps. */
+    --bandeau-echec-bg: #fbeae7;
+    --bandeau-echec-fg: #8a2318;
+    /* Récapitulatif des sources à surveiller (Story 4.3) — même principe. */
+    --recapitulatif-bg: #fcf3dc;
     --recapitulatif-fg: #6b4e00;
-    /* Panneau « À découvrir » (Story 4.4) — même principe, injecté après
-       coup par publish.py::_inserer_fragment, variables à garder stables. */
-    --a-decouvrir-bg: #e3f0ff;
-    --a-decouvrir-fg: #1a4a7a;
+    /* Panneau « À découvrir » (Story 4.4) — même principe. */
+    --a-decouvrir-bg: #e8f0f8;
+    --a-decouvrir-fg: #1e4b72;
+
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #121212;
-      --fg: #eaeaea;
-      --accent: #7db3ff;
-      --muted: #a0a0a0;
-      --card-bg: #1e1e1e;
-      --border: #333333;
-      --recommandee-bg: #2a2410;
-      --recommandee-border: #caa53d;
-      --bandeau-echec-bg: #3a1f1f;
-      --bandeau-echec-fg: #f5b8b4;
-      --recapitulatif-bg: #3a2f00;
-      --recapitulatif-fg: #f5cf5b;
-      --a-decouvrir-bg: #17324d;
-      --a-decouvrir-fg: #9cc9f5;
+      --papier: #131210;
+      --surface: #1c1a17;
+      --encre: #ece7dd;
+      --encre-2: #b6afa3;
+      --encre-3: #8a8377;
+      --filet: #2e2a25;
+      --accent: #e08b72;
+      --lien: #93c2e8;
+      --attention: #d7a85a;
+
+      --reg-apprendre: #7fa9d8;
+      --reg-ce_qui_bouge: #e08b72;
+      --reg-pour_le_metier: #8cc191;
+
+      --bandeau-echec-bg: #38201c;
+      --bandeau-echec-fg: #f3b5a8;
+      --recapitulatif-bg: #342a10;
+      --recapitulatif-fg: #edc96a;
+      --a-decouvrir-bg: #16293a;
+      --a-decouvrir-fg: #9dc6ea;
     }
   }
+
   * { box-sizing: border-box; }
+
   body {
+    margin: 0 auto;
+    max-width: 680px;
+    padding: 0 20px 72px;
+    background: var(--papier);
+    color: var(--encre);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+  }
+
+  a { color: var(--lien); }
+
+  /* --- Bandeau-titre --------------------------------------------------- */
+  .bandeau-titre {
+    padding: 44px 0 18px;
+    border-bottom: 3px double var(--filet);
+    margin-bottom: 30px;
+  }
+  .surtitre {
+    margin: 0 0 10px;
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  .bandeau-titre h1 {
     margin: 0;
-    padding: 1.25rem 1rem 3rem;
-    background: var(--bg);
-    color: var(--fg);
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    line-height: 1.5;
-    max-width: 640px;
-    margin-left: auto;
-    margin-right: auto;
+    font-family: var(--serif);
+    font-size: 2.35rem;
+    font-weight: 600;
+    line-height: 1.1;
+    letter-spacing: -0.015em;
   }
-  header { margin-bottom: 1.75rem; }
-  h1 { font-size: 1.35rem; margin: 0 0 0.3rem; }
-  .horodatage { color: var(--muted); font-size: 0.85rem; margin: 0; }
-  section.registre { margin-bottom: 2rem; }
-  h2.registre-titre {
-    font-size: 1.05rem;
-    margin: 0 0 0.75rem;
-    border-bottom: 2px solid var(--accent);
-    padding-bottom: 0.35rem;
+  .ourlet {
+    margin: 12px 0 0;
+    font-size: 0.82rem;
+    color: var(--encre-3);
   }
-  article.entree {
-    background: var(--card-bg);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 0.9rem 1rem;
-    margin-bottom: 0.75rem;
+
+  /* --- La « une » ------------------------------------------------------ */
+  .une {
+    background: var(--surface);
+    border: 1px solid var(--filet);
+    border-left: 3px solid var(--accent);
+    border-radius: 3px;
+    padding: 22px 22px 18px;
+    margin-bottom: 38px;
   }
-  article.entree--recommandee {
-    background: var(--recommandee-bg);
-    border-color: var(--recommandee-border);
+  .une-mention {
+    margin: 0 0 10px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--accent);
   }
-  .badge-recommandee {
-    display: inline-block;
+  .une .entree-titre { font-size: 1.5rem; line-height: 1.22; }
+  .une .entree-accroche { font-size: 1.02rem; color: var(--encre-2); }
+
+  /* --- Sections -------------------------------------------------------- */
+  .registre { margin-bottom: 40px; }
+  .registre-titre {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 0 0 4px;
     font-size: 0.72rem;
     font-weight: 700;
-    letter-spacing: 0.02em;
-    color: var(--recommandee-border);
-    margin-bottom: 0.35rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--teinte, var(--encre-2));
   }
-  .entree-titre { font-weight: 600; margin: 0 0 0.3rem; font-size: 1rem; }
-  .entree-titre a { color: var(--accent); text-decoration: none; }
-  .entree-titre a:hover { text-decoration: underline; }
-  .entree-accroche { margin: 0; color: var(--fg); font-size: 0.95rem; }
-  .digest-vide { color: var(--muted); font-style: italic; }
+  .registre-titre .filet { flex: 1; height: 1px; background: var(--filet); }
+  .registre-titre .compte {
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    color: var(--encre-3);
+  }
+  .registre--apprendre { --teinte: var(--reg-apprendre); }
+  .registre--ce_qui_bouge { --teinte: var(--reg-ce_qui_bouge); }
+  .registre--pour_le_metier { --teinte: var(--reg-pour_le_metier); }
+
+  /* --- Entrées --------------------------------------------------------- */
+  .entree { padding: 20px 0 18px; border-top: 1px solid var(--filet); }
+  .registre .entree:first-of-type { border-top: none; padding-top: 14px; }
+  .une .entree, .une .entree:first-of-type { border: none; padding: 0; }
+
+  .entree-titre {
+    margin: 0 0 8px;
+    font-family: var(--serif);
+    font-size: 1.16rem;
+    font-weight: 600;
+    line-height: 1.3;
+    letter-spacing: -0.005em;
+  }
+  .entree-titre a { color: var(--encre); text-decoration: none; }
+  .entree-titre a:hover { color: var(--lien); text-decoration: underline; text-underline-offset: 3px; }
+
+  .entree-accroche { margin: 0 0 12px; color: var(--encre-2); font-size: 0.95rem; }
+
+  .entree-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 7px;
+    margin: 0;
+    font-size: 0.76rem;
+    color: var(--encre-3);
+  }
+  .entree-meta .source { font-weight: 600; color: var(--teinte, var(--encre-2)); }
+  .entree-meta .sep { opacity: 0.45; }
+  .entree-meta .format { display: inline-flex; align-items: center; gap: 4px; }
+  .entree-meta svg { width: 13px; height: 13px; flex: none; }
+  .entree-meta .age--ancien { color: var(--attention); font-weight: 600; }
+
+  /* --- Pied de page ---------------------------------------------------- */
+  .pied {
+    margin-top: 48px;
+    padding-top: 18px;
+    border-top: 3px double var(--filet);
+    font-size: 0.76rem;
+    color: var(--encre-3);
+  }
+  .pied p { margin: 0 0 4px; }
+
+  .digest-vide {
+    margin: 40px 0;
+    padding: 28px 22px;
+    background: var(--surface);
+    border: 1px solid var(--filet);
+    border-radius: 3px;
+    font-family: var(--serif);
+    font-size: 1.1rem;
+    color: var(--encre-2);
+    text-align: center;
+  }
+
+  @media (max-width: 420px) {
+    body { padding: 0 16px 56px; }
+    .bandeau-titre { padding-top: 32px; }
+    .bandeau-titre h1 { font-size: 1.95rem; }
+    .une { padding: 18px 16px 15px; }
+    .une .entree-titre { font-size: 1.3rem; }
+  }
+
+  /* Confort de lecture : une entrée ne doit jamais être coupée en deux par
+     un saut de page à l'impression, ni voir ses liens perdre leur cible. */
+  @media print {
+    body { max-width: none; color: #000; background: #fff; }
+    .entree, .une { break-inside: avoid; }
+    .entree-titre a::after { content: " (" attr(href) ")"; font-size: 0.7rem; font-weight: 400; }
+  }
 </style>
 </head>
 <body>
-<header>
+<header class="bandeau-titre">
+  <p class="surtitre">IA · Data · Tech</p>
   <h1>Veille tech</h1>
-  <p class="horodatage">Généré le {{ date_generation.strftime("%d/%m/%Y à %H:%M") }} (heure de Dakar)</p>
+  <p class="ourlet">
+    {{ date_lisible }}{% if not digest_vide %} · {{ total }} entrée{{ "s" if total > 1 else "" }}{% endif %}
+  </p>
 </header>
+
 {% if digest_vide %}
 <p class="digest-vide">Rien à signaler aujourd'hui — retour demain.</p>
 {% else %}
-  {% for registre, libelle, entrees_section in sections %}
-    {% if entrees_section %}
-    <section class="registre">
-      <h2 class="registre-titre">{{ libelle }}</h2>
-      {% for entree in entrees_section %}
-      <article class="entree{% if entree.recommandee %} entree--recommandee{% endif %}">
-        {% if entree.recommandee %}<span class="badge-recommandee">★ À NE PAS MANQUER</span>{% endif %}
-        <p class="entree-titre">
-          {%- set titre_affiche = entree.item.titre if entree.item.titre else entree.accroche -%}
-          {%- set lien = url_surs(entree.item.url) -%}
-          {%- if lien -%}
-          <a href="{{ lien }}">{{ titre_affiche }}</a>
-          {%- else -%}
-          {{ titre_affiche }}
-          {%- endif -%}
-        </p>
-        <p class="entree-accroche">{{ entree.accroche }}</p>
-      </article>
-      {% endfor %}
-    </section>
-    {% endif %}
-  {% endfor %}
+
+{#- La « une » : l'entrée recommandée (FR-8), sortie de sa section par
+    render.rendre() pour tenir seule en tête de page. -#}
+{% if une %}
+<section class="une registre--{{ une.entree.item.registre }}" aria-label="À ne pas manquer">
+  <p class="une-mention">★ À ne pas manquer</p>
+  {{ entree(une) }}
+</section>
 {% endif %}
+
+{% for registre, libelle, entrees_section in sections %}
+  {% if entrees_section %}
+  <section class="registre registre--{{ registre }}">
+    <h2 class="registre-titre">
+      <span>{{ libelle }}</span>
+      <span class="filet"></span>
+      <span class="compte">{{ entrees_section | length }}</span>
+    </h2>
+    {% for e in entrees_section %}{{ entree(e) }}{% endfor %}
+  </section>
+  {% endif %}
+{% endfor %}
+
+{% endif %}
+
+<footer class="pied">
+  <p>Généré le {{ date_generation.strftime("%d/%m/%Y à %H:%M") }} (heure de Dakar).</p>
+  <p>Tri automatique par affinité avec un profil éditable — les liens pointent toujours vers la source d'origine.</p>
+</footer>
 </body>
 </html>

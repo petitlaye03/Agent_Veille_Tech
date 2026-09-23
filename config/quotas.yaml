@@ -8,3 +8,10 @@ quotas:
   apprendre: 3
   ce_qui_bouge: 3
   pour_le_metier: 2
+
+# Plafond d'entrées qu'une même source peut occuper dans un registre donné
+# (audit du 2026-09-22). Sans lui, les quotas ne plafonnaient que par
+# registre : le run du 2026-09-22 a rempli « Apprendre » avec trois épisodes
+# du même podcast, et n'a publié que 4 sources distinctes sur 17.
+# Mettre 0 (ou retirer la clé) désactive le plafond.
+max_par_source: 2

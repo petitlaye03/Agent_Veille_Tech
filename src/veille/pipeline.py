@@ -19,6 +19,7 @@ import httpx
 from veille import collect, discover, health, store
 from veille.enrich.llm import enrichir, marquer_recommandation
 from veille.filter import CHAMPS_QUOTAS, charger_ponderations
+from veille.profil import charger_profil
 from veille.publish import (
     publier,
     publier_a_decouvrir,
@@ -142,17 +143,46 @@ def executer(
                 quotas_path,
                 store_conn=store_conn,
             )
-            entrees = enrichir(resultat_collecte.items, client=llm_client)
+            # Le profil atteint désormais la **rédaction**, pas seulement le
+            # tri (audit du 2026-09-22) : `enrich/llm.py` écrivait ses
+            # accroches sans rien savoir du lecteur. Rechargé ici plutôt que
+            # remonté depuis `collecter()` — `ResultatCollecte` n'expose que
+            # `profil_neutre`, un booléen, et lui faire porter le profil
+            # entier couplerait la collecte au rendu pour un seul appelant.
+            # `charger_profil` ne lève jamais (profil neutre si illisible).
+            profil_redaction = charger_profil(
+                collect.DEFAULT_PROFIL_PATH if profil_path is None else profil_path
+            )
+            entrees = enrichir(
+                resultat_collecte.items, client=llm_client, profil=profil_redaction
+            )
 
             ponderations = charger_ponderations(scoring_path_resolu)
             entrees = marquer_recommandation(entrees, resultat_collecte.resultats_repartis, ponderations)
 
             maintenant = datetime.now(timezone.utc)
 
-            html = rendre(entrees, maintenant)
+            # Index des sources passé au rendu (audit du 2026-09-22) : la
+            # page et l'archive affichent désormais le nom lisible de la
+            # source et la nature du contenu, deux informations qui ne
+            # vivent que dans `sources.yaml` (AD-3) — `Item` ne porte que
+            # l'`id` technique. Chargé dans son propre `try` : une
+            # configuration illisible doit coûter les métadonnées
+            # d'affichage (repli sur l'`id`), jamais la publication entière.
+            try:
+                sources_affichage = {s.id: s for s in collect.load_sources(sources_path_resolu)}
+            except Exception:  # noqa: BLE001 — isolation de panne (AD-6)
+                logger.exception(
+                    "Métadonnées d'affichage des sources illisibles (%s) — "
+                    "rendu replié sur les identifiants techniques.",
+                    sources_path_resolu,
+                )
+                sources_affichage = {}
+
+            html = rendre(entrees, maintenant, sources_affichage)
             page_ok = publier(html, client=publish_client)
 
-            markdown = rendre_markdown(entrees, maintenant)
+            markdown = rendre_markdown(entrees, maintenant, sources_affichage)
             archive_ok = publier_archive(markdown, maintenant.date(), client=publish_client)
 
             if store_conn is not None:

@@ -27,10 +27,12 @@ from veille.filter import (
     ItemScore,
     RapportClassement,
     RapportFiltrageSignal,
+    RapportFraicheur,
     RapportQuotas,
     charger_ponderations,
     charger_quotas,
     classer,
+    filtrer_par_fraicheur,
     filtrer_par_signal,
     rapport_classement,
     rapport_quotas,
@@ -116,6 +118,7 @@ class ResultatCollecte:
     deja_vu: RapportDejaVu = field(default_factory=RapportDejaVu)
     dedoublonnage: RapportDedoublonnage = field(default_factory=RapportDedoublonnage)
     filtrage_signal: RapportFiltrageSignal = field(default_factory=RapportFiltrageSignal)
+    fraicheur: RapportFraicheur = field(default_factory=RapportFraicheur)
     classement: RapportClassement = field(default_factory=RapportClassement)
     quotas: RapportQuotas = field(default_factory=RapportQuotas)
 
@@ -214,6 +217,8 @@ class ResultatCollecte:
                 pertes.append(f"{self.deja_vu.total_ecartes} déjà vu(s)")
             if self.dedoublonnage.total_ecartes:
                 pertes.append(f"{self.dedoublonnage.total_ecartes} doublon(s)")
+            if self.fraicheur.total_ecartes:
+                pertes.append(f"{self.fraicheur.total_ecartes} hors fenêtre")
             if self.filtrage_signal.total_ecartes:
                 pertes.append(f"{self.filtrage_signal.total_ecartes} sous le seuil")
             if self.classement.total_ecartes:
@@ -256,6 +261,9 @@ class ResultatCollecte:
         if self.dedoublonnage.total_ecartes:
             lignes.append(f"  {self.dedoublonnage.resume()}")
 
+        if self.fraicheur.total_ecartes or self.fraicheur.ages_retenus:
+            lignes.append(f"  {self.fraicheur.resume()}")
+
         if self.filtrage_signal.total_ecartes:
             lignes.append(f"  {self.filtrage_signal.resume()}")
 
@@ -288,12 +296,13 @@ def collecter(
     collecte vide et journalisée, jamais un plantage du run entier.
 
     Pipeline complet, dans cet ordre exact (Story 3.4 ajoute la première
-    étape) : collecte → **déjà vu** → **seuil de signal** → dédoublonnage
-    → **scoring par profil** → **quotas par registre**. Le filtrage
-    « déjà vu » passe en premier, avant toute autre étape de filtrage
-    (conformément à l'AC de la Story 3.4) : un item déjà publié une nuit
-    précédente ne doit même pas être considéré par le seuil de signal, le
-    dédoublonnage ou le scoring.
+    étape, l'audit du 2026-09-22 la deuxième) : collecte → **déjà vu** →
+    **fraîcheur** → **seuil de signal** → dédoublonnage → **scoring par
+    profil** → **quotas par registre**. Le filtrage « déjà vu » passe en
+    premier, avant toute autre étape de filtrage (conformément à l'AC de
+    la Story 3.4) : un item déjà publié une nuit précédente ne doit même
+    pas être considéré par le seuil de signal, le dédoublonnage ou le
+    scoring. La fraîcheur suit immédiatement, pour la même raison.
 
     `store_conn` (renommé depuis `deja_vus_conn` en Story 4.1 — sert
     désormais deux fins sur la même connexion SQLite, un nom qui ne
@@ -365,6 +374,17 @@ def collecter(
     else:
         rapport_deja_vu = RapportDejaVu()
 
+    # La fraîcheur passe juste après le « déjà vu » et **avant** tout le
+    # reste (audit du 2026-09-22) : pour la même raison exactement, un item
+    # trop ancien ne doit même pas être soumis au seuil de signal, au
+    # dédoublonnage ni au scoring. L'ordre compte aussi vis-à-vis du
+    # dédoublonnage : filtrer d'abord garantit qu'entre une copie périmée
+    # portée par une source prioritaire et une copie fraîche portée par une
+    # source ordinaire, c'est la fraîche qui reste en lice.
+    items, rapport_fraicheur = filtrer_par_fraicheur(
+        items, sources={s.id: s for s in sources}, maintenant=debut
+    )
+
     # Le seuil de signal passe **avant** le dédoublonnage : il est déclaré
     # par source, donc chaque item doit être jugé sur le seuil de la sienne.
     # Dans l'ordre inverse, l'élection d'un gagnant pouvait faire disparaître
@@ -412,6 +432,7 @@ def collecter(
         deja_vu=rapport_deja_vu,
         dedoublonnage=rapport_dedup,
         filtrage_signal=rapport_signal,
+        fraicheur=rapport_fraicheur,
         classement=rapport_classement_obtenu,
         quotas=rapport_quotas_obtenu,
         profil_neutre=profil.est_vide,
@@ -499,10 +520,12 @@ def _journaliser(resultat: ResultatCollecte) -> None:
         )
 
     for rapport in resultat.sources_absorbees:
-        # Nommer l'étape responsable : les trois causes appellent des
+        # Nommer l'étape responsable : les causes appellent des
         # corrections opposées (retirer une source redondante, abaisser un
-        # seuil, revoir le profil).
+        # seuil, revoir le profil, relever l'horizon de la source).
         motifs = []
+        if resultat.fraicheur.ecartes_par_source.get(rapport.source_id):
+            motifs.append("hors fenêtre de fraîcheur")
         if resultat.dedoublonnage.ecartes_par_source.get(rapport.source_id):
             motifs.append("doublons")
         if resultat.filtrage_signal.ecartes_par_source.get(rapport.source_id):

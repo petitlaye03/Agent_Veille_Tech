@@ -3,7 +3,7 @@
 import textwrap
 from pathlib import Path
 
-from veille.profil import Profil, charger_profil
+from veille.profil import Profil, _analyser, charger_profil
 
 RACINE_PROJET = Path(__file__).resolve().parent.parent
 CHEMIN_PROFIL_REEL = RACINE_PROJET / "config" / "profil.md"
@@ -384,3 +384,46 @@ def test_le_profil_reel_couvre_les_trois_exemples_nommes_par_l_ac5():
     assert "crypto" in bruit
     assert "hype" in bruit
     assert "smartphone" in bruit
+
+
+# --- Audit du 2026-09-22 : la posture, lue pour la rédaction ----------
+# `profil.md` pilotait le tri sans jamais atteindre `enrich/llm.py`, qui
+# rédigeait donc ses accroches sans rien savoir du lecteur.
+
+
+def test_la_section_posture_est_collectee_comme_prose():
+    profil = _analyser(
+        "## Posture\n"
+        "- Junior Data Scientist à **Dakar**.\n"
+        "- Vise : *(surtout)* AI/LLM Engineer.\n"
+        "\n## Bruit — fait descendre\n- crypto\n"
+    )
+
+    assert profil.posture == (
+        "Junior Data Scientist à Dakar.",
+        "Vise : AI/LLM Engineer.",
+    )
+
+
+def test_la_posture_ne_devient_jamais_un_mot_cle():
+    """Ses phrases ne sont pas des mots-clés : les scorer ferait remonter
+    n'importe quel article contenant « junior » ou « Dakar »."""
+    profil = _analyser("## Posture\n- Junior Data Scientist à Dakar.\n")
+
+    assert profil.prioritaire == () and profil.bruit == ()
+
+
+def test_un_profil_sans_mots_cles_reste_vide_meme_avec_une_posture():
+    """`est_vide` ne décrit que la neutralisation du **classement** : une
+    posture seule ne doit pas faire croire que le scoring est actif."""
+    profil = _analyser("## Posture\n- Une phrase.\n")
+
+    assert profil.est_vide is True
+
+
+def test_le_profil_reel_declare_une_posture():
+    """Garde-fou sur le fichier livré : sans posture, les accroches
+    retombent silencieusement sur le prompt générique."""
+    profil = charger_profil(CHEMIN_PROFIL_REEL)
+
+    assert len(profil.posture) >= 3

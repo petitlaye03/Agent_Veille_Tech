@@ -9,11 +9,13 @@ sur des `Entree` déjà produites par `filter.py`/`enrich/llm.py`.
 import html
 import logging
 import re
-from datetime import date, datetime
+from dataclasses import dataclass
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from veille.config import FORMAT_DEFAUT, SourceConfig
 from veille.filter import CHAMPS_QUOTAS
 from veille.models import Entree
 
@@ -31,6 +33,177 @@ LIBELLES_REGISTRE: dict[str, str] = {
     "ce_qui_bouge": "Ce qui bouge",
     "pour_le_metier": "Pour le métier",
 }
+
+# Libellé et pictogramme de chaque format de contenu (audit du 2026-09-22).
+# Un épisode de podcast de 50 minutes et une brève de 2 minutes étaient
+# rendus à l'identique : sur une page dont toute la promesse est « 5 minutes
+# le matin », l'engagement demandé est une information de premier plan.
+#
+# Pictogrammes en SVG inline plutôt qu'en emoji ou en police d'icônes :
+# l'emoji dépend du jeu installé sur le téléphone (rendu coloré incohérent
+# d'un appareil à l'autre), une police d'icônes demande une requête réseau
+# que la page n'a aucune raison de payer. Le SVG hérite de `currentColor`,
+# donc suit le thème clair/sombre sans réglage supplémentaire.
+#
+# Seuls les tracés figurent ici ; les attributs de trait sont portés par le
+# gabarit. Les y mettre aussi aurait imposé un `|safe` sur une chaîne
+# contenant des guillemets — l'autoescaping les aurait transformés en
+# entités au milieu d'une balise ouvrante, produisant un SVG cassé.
+FORMATS: dict[str, tuple[str, str]] = {
+    "article": (
+        "Article",
+        '<path d="M4 5h11v14H4z"/><path d="M15 9h5v8a2 2 0 0 1-2 2h-3"/>'
+        '<path d="M7 9h5M7 12h5M7 15h3"/>',
+    ),
+    "podcast": (
+        "Podcast",
+        '<rect x="9" y="3" width="6" height="11" rx="3"/>'
+        '<path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/>',
+    ),
+    "papier": (
+        "Papier",
+        '<path d="M3 5h6a3 3 0 0 1 3 3v11a2 2 0 0 0-2-2H3z"/>'
+        '<path d="M21 5h-6a3 3 0 0 0-3 3v11a2 2 0 0 1 2-2h7z"/>',
+    ),
+    "video": (
+        "Vidéo",
+        '<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10 9.5l5 2.5-5 2.5z"/>',
+    ),
+    "release": (
+        "Release",
+        '<path d="M3 12V5a2 2 0 0 1 2-2h7l9 9-9 9z"/><circle cx="7.5" cy="7.5" r="1.5"/>',
+    ),
+}
+
+# Au-delà de ce nombre de jours, l'âge d'une entrée est signalé visuellement
+# (audit du 2026-09-22). Volontairement plus large que l'horizon de
+# `filter.HORIZON_FRAICHEUR_DEFAUT` : les sources à cadence lente déclarent
+# légitimement un horizon plus long, et leur contenu n'a rien d'anormal —
+# ce seuil ne marque que ce qui mérite d'être vu comme « pas de cette
+# semaine » avant de cliquer.
+SEUIL_AGE_SIGNALE = 21
+
+_MOIS = (
+    "janvier", "février", "mars", "avril", "mai", "juin",
+    "juillet", "août", "septembre", "octobre", "novembre", "décembre",
+)
+_JOURS = ("lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche")
+
+
+def _date_lisible(valeur: datetime | date, avec_jour: bool = False) -> str:
+    """Date en toutes lettres, en français, sans dépendance à la locale
+    du système (audit du 2026-09-22).
+
+    `strftime("%d %B %Y")` produirait « September » sur un runner GitHub
+    Actions, dont la locale est C/POSIX : la page publiée serait en partie
+    en anglais sans qu'aucun test local ne le montre, la machine de
+    développement étant, elle, en français.
+    """
+    base = f"{valeur.day} {_MOIS[valeur.month - 1]} {valeur.year}"
+    return f"{_JOURS[valeur.weekday()]} {base}" if avec_jour else base
+
+
+def _libelle_age(publication: datetime, maintenant: datetime) -> tuple[str, int]:
+    """Âge lisible (« hier », « il y a 3 semaines ») et âge en jours.
+
+    Une date postérieure à `maintenant` (horloge de source en avance, fuseau
+    mal déclaré — cas déjà connu de `health.py`, Story 4.2) est présentée
+    comme « aujourd'hui » plutôt que par un nombre de jours négatif : le
+    lecteur n'a rien à faire de l'anomalie, et `filtrer_par_fraicheur` a déjà
+    décidé de conserver l'item.
+    """
+    jours = (maintenant - publication).days
+    if jours <= 0:
+        return "aujourd'hui", max(jours, 0)
+    if jours == 1:
+        return "hier", 1
+    if jours <= 7:
+        return f"il y a {jours} jours", jours
+    if jours <= 30:
+        semaines = jours // 7
+        return f"il y a {semaines} semaine{'s' if semaines > 1 else ''}", jours
+    mois = max(jours // 30, 1)
+    return f"il y a {mois} mois", jours
+
+
+@dataclass(frozen=True)
+class EntreeRendue:
+    """Une `Entree` accompagnée de tout ce que la page doit en montrer.
+
+    Introduit par l'audit du 2026-09-22 : la page n'affichait que le titre,
+    l'accroche et le lien — ni la source (pourtant exigée par FR-7 et
+    UX-DR2, perdue dans la réécriture de l'AC1 de la Story 1.8), ni la date
+    (si bien qu'un article vieux de sept mois avait exactement la même tête
+    qu'une annonce du jour), ni le format.
+
+    Calculé dans ce module plutôt que dans le gabarit : un gabarit Jinja2
+    n'est pas testable unitairement, alors que ces règles (repli du nom sur
+    l'`id`, format inconnu, date dans le futur) en méritent chacune un.
+    """
+
+    entree: Entree
+    titre: str
+    url: str | None
+    nom_source: str
+    format: str
+    libelle_format: str
+    pictogramme: str
+    age: str
+    age_jours: int
+    date_iso: str
+    date_lisible: str
+
+    @property
+    def recommandee(self) -> bool:
+        return self.entree.recommandee
+
+    @property
+    def accroche(self) -> str:
+        return self.entree.accroche
+
+    @property
+    def est_ancienne(self) -> bool:
+        return self.age_jours > SEUIL_AGE_SIGNALE
+
+
+def _preparer_entree(
+    entree: Entree, sources: dict[str, SourceConfig], maintenant: datetime
+) -> EntreeRendue:
+    """Assemble la vue d'une entrée. Ne lève jamais : chaque champ
+    facultatif a un repli explicite (nom → `source_id`, format inconnu →
+    `FORMAT_DEFAUT`, titre vide → accroche, URL non http(s) → pas de lien)."""
+    source = sources.get(entree.item.source_id)
+    # `.strip()` ici en plus de `config._normaliser` (trouvé en écrivant
+    # les tests de l'audit) : un `nom` composé d'espaces est *truthy*, et
+    # un `SourceConfig` construit à la main ne passe pas par la
+    # normalisation du chargeur — la page affichait alors un blanc à la
+    # place de la source. Même piège de « clé blanche » que
+    # `publish._jeton_depuis_env` (trouvé en revue de la Story 1.6).
+    nom = (source.nom.strip() if source and source.nom else "") or entree.item.source_id
+
+    format_declare = (source.format if source else FORMAT_DEFAUT) or FORMAT_DEFAUT
+    if format_declare not in FORMATS:
+        # Atteignable hors `load_sources` (qui normalise déjà) : un appelant
+        # construisant un `SourceConfig` à la main n'a pas ce garde-fou.
+        format_declare = FORMAT_DEFAUT
+    libelle_format, pictogramme = FORMATS[format_declare]
+
+    age, age_jours = _libelle_age(entree.item.date_publication, maintenant)
+
+    return EntreeRendue(
+        entree=entree,
+        titre=entree.item.titre or entree.accroche,
+        url=_url_surs(entree.item.url),
+        nom_source=nom,
+        format=format_declare,
+        libelle_format=libelle_format,
+        pictogramme=pictogramme,
+        age=age,
+        age_jours=age_jours,
+        date_iso=entree.item.date_publication.date().isoformat(),
+        date_lisible=_date_lisible(entree.item.date_publication),
+    )
+
 
 # Schémas d'URI qu'un lien publié peut légitimement porter — jamais
 # `javascript:`/`data:`/autre schéma exécutable (trouvé en revue). Comparaison
@@ -148,7 +321,9 @@ def _environnement_jinja_markdown() -> Environment:
 
 def _grouper_par_registre(
     entrees: list[Entree],
-) -> tuple[list[tuple[str, str, list[Entree]]], bool]:
+    sources: dict[str, SourceConfig] | None = None,
+    maintenant: datetime | None = None,
+) -> tuple[list[tuple[str, str, list[EntreeRendue]]], bool]:
     """Regroupe les `Entree` par registre, dans l'ordre canonique
     `filter.CHAMPS_QUOTAS`, et calcule `digest_vide`.
 
@@ -167,14 +342,19 @@ def _grouper_par_registre(
     sinon une entrée ainsi égarée ne serait affichée nulle part, ni dans
     une section, ni dans le message « rien à signaler ».
     """
-    par_registre: dict[str, list[Entree]] = {registre: [] for registre in CHAMPS_QUOTAS}
-    for entree in entrees:
-        registre = entree.item.registre
+    sources = sources or {}
+    if maintenant is None:
+        maintenant = datetime.now(timezone.utc)
+
+    par_registre: dict[str, list[EntreeRendue]] = {registre: [] for registre in CHAMPS_QUOTAS}
+    for entree_brute in entrees:
+        entree = _preparer_entree(entree_brute, sources, maintenant)
+        registre = entree.entree.item.registre
         if registre not in par_registre:
             logger.warning(
                 "Entrée '%s' avec un registre inconnu ('%s') — absente du "
                 "rendu (aucune des %d sections publiées ne le reconnaît).",
-                entree.item.guid,
+                entree.entree.item.guid,
                 registre,
                 len(CHAMPS_QUOTAS),
             )
@@ -188,7 +368,11 @@ def _grouper_par_registre(
     return sections, digest_vide
 
 
-def rendre(entrees: list[Entree], date_generation: datetime) -> str:
+def rendre(
+    entrees: list[Entree],
+    date_generation: datetime,
+    sources: dict[str, SourceConfig] | None = None,
+) -> str:
     """Rend la page HTML du digest.
 
     Regroupe par `entree.item.registre`, dans l'ordre canonique
@@ -200,18 +384,44 @@ def rendre(entrees: list[Entree], date_generation: datetime) -> str:
     (AC13, `Entree`/`Item` ne garantissent pas la non-vacuité de ces
     champs — cf. `deferred-work.md`).
     """
-    sections, digest_vide = _grouper_par_registre(entrees)
+    sections, digest_vide = _grouper_par_registre(entrees, sources, date_generation)
+
+    # L'entrée recommandée est sortie de sa section pour tenir la « une »
+    # (audit du 2026-09-22) : elle portait jusqu'ici un simple badge, noyée
+    # au milieu des autres, alors que FR-8 en fait le seul repère hiérarchique
+    # de la page. Retirée de sa section plutôt que dupliquée — la voir deux
+    # fois donnerait l'impression d'un doublon, pas d'une mise en avant.
+    une = next(
+        (e for _, _, entrees_section in sections for e in entrees_section if e.recommandee),
+        None,
+    )
+    if une is not None:
+        sections = [
+            (registre, libelle, [e for e in entrees_section if e is not une])
+            for registre, libelle, entrees_section in sections
+        ]
+
+    total = sum(len(entrees_section) for _, _, entrees_section in sections) + (
+        1 if une is not None else 0
+    )
 
     environnement = _environnement_jinja()
     template = environnement.get_template("digest.html.j2")
     return template.render(
         sections=sections,
+        une=une,
+        total=total,
         date_generation=date_generation,
+        date_lisible=_date_lisible(date_generation, avec_jour=True),
         digest_vide=digest_vide,
     )
 
 
-def rendre_markdown(entrees: list[Entree], date_generation: datetime) -> str:
+def rendre_markdown(
+    entrees: list[Entree],
+    date_generation: datetime,
+    sources: dict[str, SourceConfig] | None = None,
+) -> str:
     """Rend l'archive Markdown datée du digest (FR-10, Story 1.9).
 
     Même regroupement par registre que `rendre()` (`_grouper_par_registre`,
@@ -221,15 +431,37 @@ def rendre_markdown(entrees: list[Entree], date_generation: datetime) -> str:
     sa destination entre `<...>` dans le template — une URL contenant des
     parenthèses (fréquent, ex. Wikipédia) casserait sinon `[texte](url)`.
     """
-    sections, digest_vide = _grouper_par_registre(entrees)
+    sections, digest_vide = _grouper_par_registre(entrees, sources, date_generation)
 
     environnement = _environnement_jinja_markdown()
     template = environnement.get_template("digest.md.j2")
     return template.render(
         sections=sections,
         date_generation=date_generation,
+        date_lisible=_date_lisible(date_generation),
         digest_vide=digest_vide,
     )
+
+
+# Habillage commun aux trois panneaux injectés après coup (bandeau d'échec,
+# récapitulatif de santé, « À découvrir »). Aligné sur le langage visuel du
+# gabarit lors de la refonte du 2026-09-22 — rayon de 3 px, filet d'accent à
+# gauche, mention en petites capitales — mais écrit en styles **en ligne**,
+# jamais en classes : ces fragments sont insérés dans des pages déjà
+# publiées, dont la feuille de style est figée au moment où elles ont été
+# rendues. Une classe ajoutée ici n'existerait pas dans ces pages-là.
+def _cadre_panneau(fond: str, texte: str) -> str:
+    return (
+        f"background:var({fond});color:var({texte});"
+        f"border-left:3px solid currentColor;border-radius:3px;"
+        "padding:14px 16px;margin:20px 0 0;font-size:0.9rem;line-height:1.55;"
+    )
+
+
+_MENTION_PANNEAU = (
+    "display:block;margin:0 0 6px;font-size:0.68rem;font-weight:700;"
+    "letter-spacing:0.14em;text-transform:uppercase;opacity:0.85;"
+)
 
 
 # Marqueurs stables délimitant le bandeau d'échec dans le HTML publié
@@ -266,11 +498,10 @@ def rendre_bandeau_echec(date_echec: date) -> str:
     """
     return (
         f"{BANDEAU_ECHEC_DEBUT}\n"
-        '<div style="background:var(--bandeau-echec-bg);'
-        "color:var(--bandeau-echec-fg);padding:0.75rem 1rem;"
-        'border-radius:8px;margin:0 0 1rem;font-size:0.95rem;">\n'
-        f"⚠️ Pas de nouveau digest dans la nuit du {date_echec.strftime('%d/%m/%Y')} "
-        "— problème technique. Le digest ci-dessous reste le plus récent "
+        f'<div style="{_cadre_panneau("--bandeau-echec-bg", "--bandeau-echec-fg")}">\n'
+        f'<strong style="{_MENTION_PANNEAU}">Pas de mise à jour cette nuit</strong>\n'
+        f"La génération du {date_echec.strftime('%d/%m/%Y')} a échoué pour un "
+        "problème technique. Le digest ci-dessous reste le plus récent "
         "disponible.\n"
         "</div>\n"
         f"{BANDEAU_ECHEC_FIN}"
@@ -328,11 +559,10 @@ def rendre_recapitulatif_sante(sources: list) -> str:
     )
     return (
         f"{RECAPITULATIF_SANTE_DEBUT}\n"
-        '<div style="background:var(--recapitulatif-bg);'
-        "color:var(--recapitulatif-fg);padding:0.75rem 1rem;"
-        'border-radius:8px;margin:0 0 1rem;font-size:0.95rem;">\n'
-        f"🔎 {len(sources)} source(s) à surveiller :\n"
-        f"<ul style=\"margin:0.5rem 0 0;padding-left:1.25rem;\">\n{lignes_html}\n</ul>\n"
+        f'<div style="{_cadre_panneau("--recapitulatif-bg", "--recapitulatif-fg")}">\n'
+        f'<strong style="{_MENTION_PANNEAU}">'
+        f"{len(sources)} source(s) à surveiller</strong>\n"
+        f'<ul style="margin:0;padding-left:1.15rem;">\n{lignes_html}\n</ul>\n'
         "</div>\n"
         f"{RECAPITULATIF_SANTE_FIN}"
     )
@@ -390,12 +620,11 @@ def rendre_a_decouvrir(candidat) -> str:
     )
     return (
         f"{A_DECOUVRIR_DEBUT}\n"
-        '<div style="background:var(--a-decouvrir-bg);'
-        "color:var(--a-decouvrir-fg);padding:0.75rem 1rem;"
-        'border-radius:8px;margin:0 0 1rem;font-size:0.95rem;">\n'
-        f"🔭 À découvrir cette semaine : <strong>{html.escape(candidat.source.id)}</strong>\n"
-        f'<p style="margin:0.5rem 0 0;">{html.escape(candidat.justification)}</p>\n'
-        f'<p style="margin:0.5rem 0 0;">{lien_html}</p>\n'
+        f'<div style="{_cadre_panneau("--a-decouvrir-bg", "--a-decouvrir-fg")}">\n'
+        f'<strong style="{_MENTION_PANNEAU}">À découvrir cette semaine</strong>\n'
+        f'<span style="font-weight:700;">{html.escape(candidat.source.id)}</span> — '
+        f"{html.escape(candidat.justification)}\n"
+        f'<p style="margin:6px 0 0;font-size:0.82rem;opacity:0.85;">{lien_html}</p>\n'
         "</div>\n"
         f"{A_DECOUVRIR_FIN}"
     )

@@ -1,7 +1,7 @@
 """Tests du filtrage par signal et du scoring par profil (Story 1.4)."""
 
 import textwrap
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from veille.config import SourceConfig
 from veille.filter import (
@@ -12,6 +12,7 @@ from veille.filter import (
     charger_ponderations,
     charger_quotas,
     classer,
+    filtrer_par_fraicheur,
     filtrer_par_signal,
     rapport_classement,
     rapport_quotas,
@@ -841,3 +842,175 @@ def test_un_registre_none_est_distingue_d_un_registre_inconnu_texte(caplog):
     message = caplog.records[0].message
     assert "sans registre défini" in message
     assert "'None'" not in message
+
+
+# --- Audit du 2026-09-22 : filtre de fraîcheur ------------------------
+# Le pipeline ne regardait jamais `Item.date_publication` : un run réel du
+# 2026-09-22 a publié quatre items de plus de 200 jours sur huit.
+
+
+MAINTENANT = datetime(2026, 9, 22, 12, 0, tzinfo=timezone.utc)
+
+
+def _item_age(jours, source_id="src", **overrides):
+    return _item(
+        source_id=source_id,
+        date_publication=MAINTENANT - timedelta(days=jours),
+        **overrides,
+    )
+
+
+def _sources(**par_id):
+    return {
+        sid: SourceConfig(
+            id=sid, type="rss", url="u", langue="fr", registre="apprendre", **kw
+        )
+        for sid, kw in par_id.items()
+    }
+
+
+def test_fraicheur_ecarte_au_dela_de_l_horizon_et_garde_en_deca():
+    items = [_item_age(0, guid="a"), _item_age(10, guid="b"), _item_age(11, guid="c")]
+
+    retenus, rapport = filtrer_par_fraicheur(
+        items, _sources(src={}), MAINTENANT, horizon_defaut=10
+    )
+
+    assert [i.guid for i in retenus] == ["a", "b"]
+    assert rapport.ecartes_par_source == {"src": 1}
+
+
+def test_fraicheur_respecte_l_horizon_declare_par_la_source():
+    """Une source à cadence lente (podcast bimensuel, blog irrégulier) serait
+    sinon systématiquement hors fenêtre alors qu'elle publie normalement."""
+    items = [_item_age(45, source_id="lente", guid="a"), _item_age(45, source_id="src", guid="b")]
+
+    retenus, _ = filtrer_par_fraicheur(
+        items, _sources(lente={"horizon_jours": 60}, src={}), MAINTENANT, horizon_defaut=10
+    )
+
+    assert [i.guid for i in retenus] == ["a"]
+
+
+def test_fraicheur_conserve_un_item_date_dans_le_futur():
+    """Horloge de source en avance ou fuseau mal déclaré : `health.py` signale
+    déjà ces sources, faire disparaître le contenu serait la seule perte."""
+    retenus, rapport = filtrer_par_fraicheur(
+        [_item_age(-3)], _sources(src={}), MAINTENANT, horizon_defaut=10
+    )
+
+    assert len(retenus) == 1
+    assert rapport.total_ecartes == 0
+
+
+def test_fraicheur_conserve_un_item_dont_la_source_est_inconnue():
+    """Même garde-fou que `filtrer_par_signal` : l'absence de configuration
+    n'est pas une insuffisance, l'horizon global s'applique."""
+    retenus, _ = filtrer_par_fraicheur(
+        [_item_age(3, source_id="jamais-declaree")], {}, MAINTENANT, horizon_defaut=10
+    )
+
+    assert len(retenus) == 1
+
+
+def test_fraicheur_horizon_defaut_resolu_a_l_appel(monkeypatch):
+    """Lié dans la signature, `HORIZON_FRAICHEUR_DEFAUT` ne serait plus
+    substituable — ni par un test, ni par un futur réglage."""
+    monkeypatch.setattr("veille.filter.HORIZON_FRAICHEUR_DEFAUT", 2)
+
+    retenus, _ = filtrer_par_fraicheur([_item_age(5)], _sources(src={}), MAINTENANT)
+
+    assert retenus == []
+
+
+def test_fraicheur_maintenant_naif_ne_leve_pas(caplog):
+    """Une soustraction entre datetime naïf et aware lèverait au milieu du
+    pipeline, hors de toute isolation de panne."""
+    naif = MAINTENANT.replace(tzinfo=None)
+
+    with caplog.at_level("WARNING"):
+        retenus, _ = filtrer_par_fraicheur([_item_age(1)], _sources(src={}), naif)
+
+    assert len(retenus) == 1
+    assert "UTC" in caplog.text
+
+
+def test_fraicheur_sans_maintenant_utilise_l_horloge_courante():
+    recent = _item(date_publication=datetime.now(timezone.utc))
+
+    retenus, _ = filtrer_par_fraicheur([recent], _sources(src={}))
+
+    assert len(retenus) == 1
+
+
+def test_rapport_fraicheur_resume_les_ages_retenus():
+    items = [_item_age(0, guid="a"), _item_age(4, guid="b"), _item_age(99, guid="c")]
+
+    _, rapport = filtrer_par_fraicheur(items, _sources(src={}), MAINTENANT, horizon_defaut=10)
+
+    resume = rapport.resume()
+    assert "1 item(s) hors fenêtre" in resume
+    assert "min 0j" in resume and "max 4j" in resume
+
+
+def test_rapport_fraicheur_vide_le_dit():
+    _, rapport = filtrer_par_fraicheur([], {}, MAINTENANT)
+
+    assert rapport.resume() == "Fraîcheur : aucun item daté à évaluer."
+
+
+# --- Audit du 2026-09-22 : plafond par source ------------------------
+
+
+def _score(item, valeur):
+    return ItemScore(item=item, score=Score(valeur=valeur))
+
+
+def test_quotas_plafonnent_une_source_dominante():
+    """Un run réel a rempli « Apprendre » avec trois épisodes du même podcast."""
+    classement = [
+        _score(_item(source_id="podcast", guid=f"p{i}"), 10 - i) for i in range(3)
+    ] + [_score(_item(source_id="autre", guid="x"), 1)]
+
+    retenus = repartir_par_quotas(classement, Quotas(apprendre=3, max_par_source=2))
+
+    assert [i.item.source_id for i in retenus] == ["podcast", "podcast", "autre"]
+
+
+def test_quotas_max_par_source_a_zero_desactive_le_plafond():
+    """Aucune régression pour une configuration qui ne déclare pas la clé."""
+    classement = [_score(_item(source_id="podcast", guid=f"p{i}"), 10 - i) for i in range(3)]
+
+    retenus = repartir_par_quotas(classement, Quotas(apprendre=3, max_par_source=0))
+
+    assert len(retenus) == 3
+
+
+def test_quotas_max_par_source_compte_par_registre():
+    """Une source rattachée à deux registres ne doit pas se priver elle-même
+    d'un registre en remplissant l'autre."""
+    classement = [
+        _score(_item(source_id="s", guid="a", registre="apprendre"), 5),
+        _score(_item(source_id="s", guid="b", registre="ce_qui_bouge"), 4),
+    ]
+
+    retenus = repartir_par_quotas(classement, Quotas(max_par_source=1))
+
+    assert len(retenus) == 2
+
+
+def test_charger_quotas_lit_max_par_source_a_la_racine(tmp_path):
+    """Déclaré sous `quotas:`, il serait signalé comme registre inconnu."""
+    chemin = tmp_path / "quotas.yaml"
+    chemin.write_text(
+        "quotas:\n  apprendre: 3\nmax_par_source: 2\n", encoding="utf-8"
+    )
+
+    assert charger_quotas(chemin).max_par_source == 2
+
+
+def test_charger_quotas_max_par_source_absent_vaut_zero(tmp_path):
+    chemin = tmp_path / "quotas.yaml"
+    chemin.write_text("quotas:\n  apprendre: 3\n", encoding="utf-8")
+
+    assert charger_quotas(chemin).max_par_source == 0
