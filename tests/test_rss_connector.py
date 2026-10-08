@@ -271,3 +271,48 @@ def test_contenu_brut_retombe_sur_content_quand_summary_absent(tmp_path):
 
     assert len(items) == 1
     assert "contenu vit dans content" in items[0].contenu_brut
+
+
+# --- 2026-10-08 : repli sur <updated> -------------------------------------
+# Les flux Atom des releases GitHub et le RSS du Monde Informatique ne portent
+# que <updated>. Sans repli, leurs items recevaient tous l'heure de collecte.
+
+_ATOM_SANS_PUBLISHED = """<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Releases</title>
+  <entry>
+    <id>tag:github.com,2008:Repository/1/v1.2.0</id>
+    <title>v1.2.0</title>
+    <link href="https://example.invalid/releases/v1.2.0"/>
+    <updated>2026-10-07T22:22:54Z</updated>
+    <content type="html">Notes de version.</content>
+  </entry>
+</feed>
+"""
+
+
+def test_date_retombe_sur_updated_quand_published_est_absent(tmp_path):
+    flux = tmp_path / "releases.atom"
+    flux.write_text(_ATOM_SANS_PUBLISHED, encoding="utf-8")
+
+    (item,) = fetch(_source_config(str(flux)))
+
+    assert (item.date_publication.year, item.date_publication.month, item.date_publication.day) == (2026, 10, 7)
+    assert (item.date_publication.hour, item.date_publication.minute) == (22, 22)
+
+
+def test_published_reste_prioritaire_sur_updated(tmp_path):
+    """`updated` peut refléter une simple correction d'un article ancien —
+    jamais sa date de parution quand celle-ci est connue."""
+    flux = tmp_path / "flux.atom"
+    flux.write_text(
+        _ATOM_SANS_PUBLISHED.replace(
+            "<updated>2026-10-07T22:22:54Z</updated>",
+            "<published>2026-01-15T08:00:00Z</published><updated>2026-10-07T22:22:54Z</updated>",
+        ),
+        encoding="utf-8",
+    )
+
+    (item,) = fetch(_source_config(str(flux)))
+
+    assert (item.date_publication.month, item.date_publication.day) == (1, 15)

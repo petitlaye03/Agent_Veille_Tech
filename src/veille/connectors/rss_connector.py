@@ -156,12 +156,24 @@ def _extract_contenu(entry) -> str:
 
 
 def _to_utc_datetime(entry) -> datetime:
-    struct = entry.get("published_parsed")
+    # Repli sur `updated_parsed` (corrigé le 2026-10-08) : les flux Atom des
+    # releases GitHub et le flux RSS du Monde Informatique ne portent **que**
+    # `<updated>`, jamais `<published>`. Faute de ce repli, cinq sources sur
+    # dix-sept recevaient l'heure de collecte pour tous leurs items — elles
+    # paraissaient publier « aujourd'hui » en permanence, passaient donc
+    # toujours le filtre de fraîcheur, et déclenchaient la détection de dates
+    # figées de `health.py` (100 % des items à la même minute). Vérifié sur
+    # les flux réels : une date `updated` distincte par item.
+    #
+    # `published` reste prioritaire : quand les deux existent, `updated` peut
+    # refléter une simple correction d'article ancien, pas sa parution.
+    struct = entry.get("published_parsed") or entry.get("updated_parsed")
     if struct is None:
         # Pas de date exploitable dans le flux : horodater à la collecte
         # plutôt que planter — mieux vaut une date approximative qu'un item perdu.
         return datetime.now(timezone.utc)
-    # published_parsed est un struct_time déjà normalisé en UTC par feedparser ;
+    # published_parsed/updated_parsed sont des struct_time déjà normalisés en
+    # UTC par feedparser ;
     # calendar.timegm (et non time.mktime, qui appliquerait le fuseau local) le
     # convertit correctement en timestamp UTC.
     return datetime.fromtimestamp(calendar.timegm(struct), tz=timezone.utc)

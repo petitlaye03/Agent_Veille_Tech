@@ -32,6 +32,9 @@ from veille.render import (
     A_DECOUVRIR_FIN,
     BANDEAU_ECHEC_DEBUT,
     BANDEAU_ECHEC_FIN,
+    EMPLACEMENT_A_DECOUVRIR,
+    EMPLACEMENT_BANDEAU_ECHEC,
+    EMPLACEMENT_RECAPITULATIF_SANTE,
     RECAPITULATIF_SANTE_DEBUT,
     RECAPITULATIF_SANTE_FIN,
     rendre_a_decouvrir,
@@ -270,7 +273,7 @@ def publier_bandeau_echec(bandeau: str, client: httpx.Client | None = None) -> b
         corps = {
             "message": "Bandeau d'échec nocturne",
             "content": base64.b64encode(
-                _inserer_fragment(html_existant, _MOTIF_BANDEAU_ECHEC, bandeau).encode("utf-8")
+                _inserer_fragment(html_existant, _MOTIF_BANDEAU_ECHEC, bandeau, EMPLACEMENT_BANDEAU_ECHEC).encode("utf-8")
             ).decode("ascii"),
         }
         if charge.get("sha"):  # même garde que `_publier` — jamais `"sha": null`
@@ -302,7 +305,9 @@ _MOTIF_A_DECOUVRIR = re.compile(
 _MOTIF_BALISE_BODY = re.compile(r"<body[^>]*>", re.IGNORECASE)
 
 
-def _inserer_fragment(html: str, motif: re.Pattern, fragment: str) -> str:
+def _inserer_fragment(
+    html: str, motif: re.Pattern, fragment: str, emplacement: str | None = None
+) -> str:
     """Remplace le contenu déjà présent entre les marqueurs stables
     correspondant à `motif` s'il y en a un (idempotence — un fragment ne
     doit jamais s'empiler d'un run au suivant), sinon l'insère juste après
@@ -330,6 +335,15 @@ def _inserer_fragment(html: str, motif: re.Pattern, fragment: str) -> str:
         # une corruption externe en laissait plusieurs), toutes convergent
         # vers le même contenu plutôt que d'en laisser une orpheline.
         return motif.sub(lambda _m: fragment, html)
+    if emplacement and emplacement in html:
+        # Emplacement réservé par le gabarit (2026-10-08) : chaque panneau a
+        # sa place dans la page — le bandeau d'échec sous le titre, « À
+        # découvrir » et le récapitulatif de santé en bas, comme le décrivait
+        # UJ-2 du PRD. Jusque-là, tout s'empilait avant le titre, et le
+        # premier contenu lu chaque matin était une liste de sources en
+        # panne. Une page publiée avant l'apparition de ces emplacements n'en
+        # porte aucun : elle retombe sur l'insertion après `<body>`.
+        return html.replace(emplacement, f"{emplacement}\n{fragment}", 1)
     if _MOTIF_BALISE_BODY.search(html):
         return _MOTIF_BALISE_BODY.sub(lambda m: f"{m.group(0)}\n{fragment}", html, count=1)
     return f"{fragment}\n{html}"
@@ -385,7 +399,9 @@ def publier_recapitulatif_sante(
 
         if sources:
             fragment = rendre_recapitulatif_sante(sources)
-            html_nouveau = _inserer_fragment(html_existant, _MOTIF_RECAPITULATIF_SANTE, fragment)
+            html_nouveau = _inserer_fragment(
+                html_existant, _MOTIF_RECAPITULATIF_SANTE, fragment, EMPLACEMENT_RECAPITULATIF_SANTE
+            )
             message = "Mise à jour du récapitulatif des sources à surveiller"
         else:
             if not _MOTIF_RECAPITULATIF_SANTE.search(html_existant):
@@ -469,7 +485,9 @@ def publier_a_decouvrir(candidat, client: httpx.Client | None = None) -> bool | 
 
         if candidat is not None:
             fragment = rendre_a_decouvrir(candidat)
-            html_nouveau = _inserer_fragment(html_existant, _MOTIF_A_DECOUVRIR, fragment)
+            html_nouveau = _inserer_fragment(
+                html_existant, _MOTIF_A_DECOUVRIR, fragment, EMPLACEMENT_A_DECOUVRIR
+            )
             message = "Mise à jour du panneau « À découvrir »"
         else:
             if not _MOTIF_A_DECOUVRIR.search(html_existant):

@@ -71,6 +71,17 @@ ETAT_SOMMEIL = "en_sommeil"
 # répété, jamais une simple paire fortuite.
 SEUIL_DATES_SUSPECTES = 3
 
+# Part minimale du lot que la minute répétée doit couvrir (2026-10-08). Le
+# seuil absolu seul reposait sur l'hypothèse ci-dessus — « le cas observé est
+# binaire, pas une question de pourcentage » — que la production a démentie :
+# trois sources saines (OpenAI, blog Hugging Face, HF Daily Papers) étaient
+# signalées « suspectes » en permanence, parce qu'un flux de 1 255 items en
+# compte inévitablement 23 importés à la même minute (2 %), et que HF Daily
+# Papers publie par lots arXiv (36 % mesurés). Les vrais flux à dates figées
+# mesurés ce jour-là étaient, eux, à 100 %. Une alerte qui sonne tous les
+# jours sur des sources saines apprend surtout à ne plus la lire.
+PART_DATES_SUSPECTES = 0.5
+
 
 @dataclass(frozen=True)
 class RapportSante:
@@ -94,9 +105,10 @@ class RapportSante:
 def detecter_dates_suspectes(items: list[Item]) -> bool:
     """Vrai si au moins `SEUIL_DATES_SUSPECTES` items de `items` partagent
     exactement la même `date_publication` tronquée à la minute (Story 4.2,
-    FR-13) — signal d'un flux qui rejoue une même date figée sur plusieurs
-    articles distincts (« ment sur sa fraîcheur »), plutôt qu'une simple
-    coïncidence isolée entre deux items.
+    FR-13) **et** que ces items représentent au moins `PART_DATES_SUSPECTES`
+    du lot (2026-10-08) — signal d'un flux dont les dates ne portent plus
+    d'information (« ment sur sa fraîcheur »), plutôt que d'un import
+    d'archive ou d'une publication par lots dans un flux par ailleurs sain.
 
     Fonction pure, aucune I/O. Ne lève jamais (AD-6) : une date malformée
     ou incomparable dégrade en `False` (aucune anomalie présumée) plutôt
@@ -107,7 +119,13 @@ def detecter_dates_suspectes(items: list[Item]) -> bool:
         for item in items:
             minute = item.date_publication.replace(second=0, microsecond=0)
             comptes[minute] = comptes.get(minute, 0) + 1
-        return any(compte >= SEUIL_DATES_SUSPECTES for compte in comptes.values())
+        if not comptes:
+            return False
+        plus_frequent = max(comptes.values())
+        return (
+            plus_frequent >= SEUIL_DATES_SUSPECTES
+            and plus_frequent >= PART_DATES_SUSPECTES * len(items)
+        )
     except Exception:  # noqa: BLE001 — isolation totale (AD-6)
         logger.exception("Échec de la détection de dates suspectes — aucune anomalie présumée.")
         return False
@@ -322,6 +340,11 @@ class SourceASurveiller:
     source_id: str
     etat: str
     raison: str
+    # Nom lisible de la source (2026-10-08), repris de `sources.yaml` quand
+    # `sources_configurees` est fourni — le récapitulatif publié affichait
+    # sinon des identifiants techniques (« hf-daily-papers ») sur une page
+    # destinée à un lecteur, pas à un opérateur. Vide : repli sur l'`id`.
+    nom: str = ""
 
 
 def lister_sources_a_surveiller(
@@ -359,6 +382,9 @@ def lister_sources_a_surveiller(
     ids_configures = (
         {s.id for s in sources_configurees} if sources_configurees is not None else None
     )
+    noms = {
+        s.id: (getattr(s, "nom", "") or "").strip() for s in (sources_configurees or [])
+    }
 
     resultats: list[SourceASurveiller] = []
     try:
@@ -381,7 +407,7 @@ def lister_sources_a_surveiller(
                     dernier_item_vu = datetime.fromisoformat(dernier_item_vu_str)
                     age_jours = (aujourdhui - dernier_item_vu.date()).days
                     if age_jours > SEUIL_SUSPECTE_JOURS:
-                        raisons.append(f"{age_jours} jour(s) sans nouvel item")
+                        raisons.append(f"aucune publication depuis {age_jours} jours")
                 except (ValueError, TypeError):
                     # Trouvé en revue (Edge Case Hunter) : une valeur non-
                     # chaîne (corruption/migration future) lève `TypeError`,
@@ -390,9 +416,13 @@ def lister_sources_a_surveiller(
                     # simplement dégrader sur la raison par âge.
                     pass
             if dates_suspectes:
-                raisons.append("dates suspectes détectées (plusieurs items à la même minute)")
+                raisons.append("dates de publication peu fiables")
             raison = " ; ".join(raisons) if raisons else "raison indéterminée"
-            resultats.append(SourceASurveiller(source_id=source_id, etat=etat, raison=raison))
+            resultats.append(
+                SourceASurveiller(
+                    source_id=source_id, etat=etat, raison=raison, nom=noms.get(source_id, "")
+                )
+            )
         except Exception:  # noqa: BLE001 — isolation par ligne (AD-6)
             logger.exception(
                 "Échec de la reconstruction de la raison pour la source '%s' — ignorée dans le récapitulatif.",

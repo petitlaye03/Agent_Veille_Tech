@@ -16,6 +16,13 @@
 #                   connecteurs existants (AD-2), sans aucune modification de
 #                   config.py/SourceConfig.
 #
+#   site          — (2026-10-08, facultatif) page d'accueil lisible de la
+#                   source, liée depuis le panneau « À découvrir ». Le lien
+#                   pointait jusque-là vers le flux XML lui-même, illisible
+#                   dans un navigateur. Absent : racine du domaine du flux.
+#   source.nom/format — mêmes champs que dans sources.yaml : ils suivent le
+#                   bloc `source` tel quel le jour où le candidat est adopté.
+#
 # Un candidat adopté (ajouté à sources.yaml) est automatiquement exclu des
 # propositions futures par discover.proposer_source() (même id) — retirer
 # l'entrée ici reste un geste manuel optionnel, pas nécessaire.
@@ -23,14 +30,17 @@
 candidats:
   # --- Apprendre -------------------------------------------------------
   - justification: >-
-      Analyses de fond très citées sur le RL/post-training des LLM, par une
-      chercheuse d'Allen AI — angle rarement couvert par le socle actuel.
+      Analyses de fond très citées sur le RL/post-training des LLM, par
+      Nathan Lambert (Ai2) — angle rarement couvert par le socle actuel.
     source:
       id: interconnects-blog
       type: rss
       url: https://www.interconnects.ai/feed
       langue: en
       registre: apprendre
+      nom: "Interconnects"
+      format: article
+    site: https://www.interconnects.ai
 
   - justification: >-
       Évaluations de LLM et fine-tuning expliqués par un praticien reconnu
@@ -42,6 +52,9 @@ candidats:
       url: https://hamel.dev/index.xml
       langue: en
       registre: apprendre
+      nom: "Hamel Husain"
+      format: article
+    site: https://hamel.dev
 
   - justification: >-
       Billets de référence sur les mécanismes internes des LLM (Lilian
@@ -52,6 +65,9 @@ candidats:
       url: https://lilianweng.github.io/index.xml
       langue: en
       registre: apprendre
+      nom: "Lil'Log — Lilian Weng"
+      format: article
+    site: https://lilianweng.github.io
 
   - justification: >-
       Vulgarisation IA en français par un ingénieur, angle pédagogique
@@ -62,6 +78,9 @@ candidats:
       url: https://www.youtube.com/feeds/videos.xml?channel_id=UCnEHCrot2HkySxMTmDPhZyg
       langue: fr
       registre: apprendre
+      nom: "Defend Intelligence"
+      format: video
+    site: https://www.youtube.com/channel/UCnEHCrot2HkySxMTmDPhZyg
 
   - justification: >-
       Design logiciel Python filmé, format vidéo complémentaire aux flux
@@ -72,6 +91,9 @@ candidats:
       url: https://www.youtube.com/feeds/videos.xml?channel_id=UCVhQ2NnY5Rskt6UjCUkJ_DA
       langue: en
       registre: apprendre
+      nom: "ArjanCodes"
+      format: video
+    site: https://www.youtube.com/channel/UCVhQ2NnY5Rskt6UjCUkJ_DA
 
   # --- Ce qui bouge ------------------------------------------------------
   - justification: >-
@@ -83,6 +105,9 @@ candidats:
       url: https://deepmind.google/blog/rss.xml
       langue: en
       registre: ce_qui_bouge
+      nom: "Google DeepMind"
+      format: article
+    site: https://deepmind.google/blog
 
   - justification: >-
       Billets d'ingénierie de plateforme à grande échelle (GitHub même) —
@@ -93,6 +118,9 @@ candidats:
       url: https://github.blog/engineering/feed/
       langue: en
       registre: ce_qui_bouge
+      nom: "GitHub Engineering"
+      format: article
+    site: https://github.blog/engineering
 
   - justification: >-
       Analyses de fond sur l'IA par une revue scientifique grand public
@@ -103,17 +131,24 @@ candidats:
       url: https://www.technologyreview.com/topic/artificial-intelligence/feed
       langue: en
       registre: ce_qui_bouge
+      nom: "MIT Technology Review"
+      format: article
+    site: https://www.technologyreview.com/topic/artificial-intelligence
 
   # --- Pour le métier ------------------------------------------------------
   - justification: >-
       Newsletter hebdomadaire spécialisée data engineering — renforce un
-      registre encore porté par une seule source (Décideo).
+      registre porté par deux sources seulement (Décideo, Le Monde
+      Informatique).
     source:
       id: data-engineering-weekly
       type: rss
       url: https://www.dataengineeringweekly.com/feed
       langue: en
       registre: pour_le_metier
+      nom: "Data Engineering Weekly"
+      format: article
+    site: https://www.dataengineeringweekly.com
 
   - justification: >-
       Billets techniques de l'éditeur de dbt, outil central de la stack data
@@ -124,3 +159,6 @@ candidats:
       url: https://www.getdbt.com/blog/rss.xml
       langue: en
       registre: pour_le_metier
+      nom: "Blog dbt Labs"
+      format: article
+    site: https://www.getdbt.com/blog

@@ -6,6 +6,8 @@
 # Types disponibles : rss | json | scrape
 # Registres         : apprendre | ce_qui_bouge | pour_le_metier
 # Formats           : article | podcast | papier | video | release
+#                     (`release` : seules les versions mineures/majeures
+#                     stables passent — voir filter.filtrer_releases)
 #
 # nom (audit du 2026-09-22) — libellé lisible affiché sur la page, à la place
 # de l'`id` technique. Absent : la page retombe sur l'`id`.
@@ -19,7 +21,7 @@
 # `filter.HORIZON_FRAICHEUR_DEFAUT` (10 jours) s'applique. À relever pour une
 # source à cadence lente qui serait sinon systématiquement hors fenêtre :
 # relevé ci-dessous pour le podcast (30 j), les blogs irréguliers (21-60 j),
-# la chaîne vidéo (60 j) et les dépôts GitHub (30 j, releases espacées).
+# la chaîne vidéo (60 j) et Anthropic (30 j).
 #
 # priorite (optionnel, défaut 0) — départage le dédoublonnage : quand deux
 # sources relaient le même article, celle de plus haute priorité l'emporte.
@@ -112,19 +114,21 @@ sources:
   # ==========================================================================
 
   # --- Apprendre (+8) -------------------------------------------------------
-  # Dépôts GitHub à fort signal (releases.atom) — 4 des ~10 cités par
+  # Dépôts GitHub à fort signal (releases.atom) — 3 des ~10 cités par
   # l'addendum, en entrées séparées plutôt qu'un « panier » à 1 source :
   # regrouper plusieurs flux sous un seul id demanderait un connecteur
   # multi-URL, hors périmètre « sans modification de code » (Dev Notes).
-  - id: github-llamacpp
-    priorite: 10
-    type: rss
-    url: https://github.com/ggml-org/llama.cpp/releases.atom
-    langue: en
-    registre: apprendre
-    nom: llama.cpp
-    format: release
-    horizon_jours: 30
+  #
+  # `format: release` déclenche `filter.filtrer_releases` (2026-10-08) : seules
+  # les versions stables mineures et majeures passent, jamais les `-rc` ni
+  # les correctifs `x.y.z`. Pas d'`horizon_jours` : une release est de
+  # l'actualité, l'horizon global (10 jours) lui convient.
+  #
+  # `github-llamacpp` retiré le 2026-10-08 : llama.cpp publie une « release »
+  # par commit fusionné (`b11506`, `b11507`… une dizaine par jour, sans titre
+  # dans la plupart des cas). Aucune n'est une version au sens éditorial — la
+  # source ne peut structurellement produire que du bruit sur cette page. Un
+  # run réel du 2026-10-08 en avait publié une, intitulée « b11475 ».
 
   - id: github-vllm
     priorite: 10
@@ -134,7 +138,6 @@ sources:
     registre: apprendre
     nom: vLLM
     format: release
-    horizon_jours: 30
 
   - id: github-transformers
     priorite: 10
@@ -144,7 +147,6 @@ sources:
     registre: apprendre
     nom: Transformers
     format: release
-    horizon_jours: 30
 
   - id: github-ollama
     priorite: 10
@@ -154,7 +156,6 @@ sources:
     registre: apprendre
     nom: Ollama
     format: release
-    horizon_jours: 30
 
   - id: eugene-yan
     priorite: 10

@@ -24,7 +24,7 @@ from pathlib import Path
 import yaml
 
 from veille.collect import CONNECTORS, DEFAULT_SOURCES_PATH
-from veille.config import SourceConfig, load_sources
+from veille.config import SourceConfig, load_sources, _normaliser
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +43,11 @@ class CandidatSource:
 
     source: SourceConfig
     justification: str
+    # Page d'accueil lisible de la source (2026-10-08), liée depuis le
+    # panneau « À découvrir ». Facultative : vide, `render.py` retombe sur
+    # la racine du domaine du flux — jamais sur le flux XML lui-même, que
+    # le panneau affichait jusque-là et qu'un navigateur ne sait pas lire.
+    site: str = ""
 
 
 def charger_candidats(path: str | Path | None = None) -> list[CandidatSource]:
@@ -85,7 +90,10 @@ def charger_candidats(path: str | Path | None = None) -> list[CandidatSource]:
     ids_deja_vus: set[str] = set()
     for entree in entrees:
         try:
-            source = SourceConfig(**entree["source"])
+            # Même normalisation que `load_sources` (2026-10-08) : `nom` et
+            # `format` y sont nettoyés et validés, et un candidat adopté
+            # doit se comporter ici comme il se comportera dans le socle.
+            source = SourceConfig(**_normaliser(entree["source"]))
             justification = entree["justification"]
             if not isinstance(justification, str):
                 # Trouvé en revue (Blind Hunter) : contrairement à `source`
@@ -106,7 +114,13 @@ def charger_candidats(path: str | Path | None = None) -> list[CandidatSource]:
                 )
                 continue
             ids_deja_vus.add(source.id)
-            candidats.append(CandidatSource(source=source, justification=justification))
+            site = entree.get("site")
+            # Facultatif et purement décoratif : une valeur mal typée est
+            # ignorée, jamais une raison d'écarter le candidat entier.
+            site = site.strip() if isinstance(site, str) else ""
+            candidats.append(
+                CandidatSource(source=source, justification=justification, site=site)
+            )
         except (TypeError, AttributeError, KeyError):
             logger.warning(
                 "Entrée de candidat invalide dans %s, ignorée : %r", chemin, entree

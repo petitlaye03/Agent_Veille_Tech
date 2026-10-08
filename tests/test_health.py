@@ -526,7 +526,8 @@ def test_lister_sources_a_surveiller_raison_par_dates_suspectes(tmp_path):
 
     assert len(resultat) == 1
     assert resultat[0].etat == health.ETAT_SUSPECTE
-    assert "dates suspectes" in resultat[0].raison
+    # Libellé reformulé le 2026-10-08 pour le lecteur de la page publiée.
+    assert "dates de publication peu fiables" in resultat[0].raison
     assert "jour" not in resultat[0].raison
 
 
@@ -545,8 +546,8 @@ def test_lister_sources_a_surveiller_raison_combinee(tmp_path):
     conn.close()
 
     assert len(resultat) == 1
-    assert "jour" in resultat[0].raison
-    assert "dates suspectes" in resultat[0].raison
+    assert "aucune publication depuis 45 jours" in resultat[0].raison
+    assert "dates de publication peu fiables" in resultat[0].raison
 
 
 def test_lister_sources_a_surveiller_isole_une_ligne_corrompue(tmp_path):
@@ -573,3 +574,54 @@ def test_lister_sources_a_surveiller_degrade_sans_lever_si_la_connexion_echoue(t
     conn = store.ouvrir(tmp_path / "d.sqlite3")
     conn.close()
     assert health.lister_sources_a_surveiller(conn, date.today()) == []
+
+
+# --- 2026-10-08 : proportion, pas seulement seuil absolu -----------------
+# Trois sources saines étaient signalées en permanence : un flux d'archive
+# de 1 255 items en compte inévitablement 23 importés à la même minute.
+
+
+def _lot(meme_minute: int, distincts: int) -> list:
+    base = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
+    figes = [_item_avec_date(base, guid=f"f{i}") for i in range(meme_minute)]
+    etales = [_item_avec_date(base + timedelta(hours=i + 1), guid=f"d{i}") for i in range(distincts)]
+    return figes + etales
+
+
+def test_import_d_archive_dans_un_gros_flux_n_est_pas_suspect():
+    """OpenAI mesuré : 23 items à la même minute sur 1 255 (2 %)."""
+    assert health.detecter_dates_suspectes(_lot(23, 1232)) is False
+
+
+def test_publication_par_lots_minoritaire_n_est_pas_suspecte():
+    """HF Daily Papers mesuré : 18 items sur 50 (36 %), lots arXiv."""
+    assert health.detecter_dates_suspectes(_lot(18, 32)) is False
+
+
+def test_flux_a_dates_figees_reste_suspect():
+    """Le vrai cas pathologique mesuré : 100 % des items à la même minute."""
+    assert health.detecter_dates_suspectes(_lot(10, 0)) is True
+
+
+def test_majorite_d_items_a_la_meme_minute_est_suspecte():
+    assert health.detecter_dates_suspectes(_lot(6, 4)) is True
+
+
+def test_seuil_absolu_reste_requis_meme_a_cent_pour_cent():
+    """Deux items à la même minute sur deux : une paire fortuite, toujours
+    exemptée par l'AC de la Story 4.2."""
+    assert health.detecter_dates_suspectes(_lot(2, 0)) is False
+
+
+def test_lister_sources_a_surveiller_reprend_le_nom_lisible(tmp_path):
+    """2026-10-08 : le récapitulatif publié affichait l'identifiant technique."""
+    conn = store.ouvrir(tmp_path / "d.sqlite3")
+    ancien = datetime.now(timezone.utc) - timedelta(days=45)
+    health.enregistrer_activite("src", [_item_avec_date(ancien)], conn)
+    health.evaluer_fraicheur([_source("src")], conn, date.today())
+    configurees = [SimpleNamespace(id="src", nom="  Ma Source  ")]
+
+    resultat = health.lister_sources_a_surveiller(conn, date.today(), configurees)
+    conn.close()
+
+    assert resultat[0].nom == "Ma Source"

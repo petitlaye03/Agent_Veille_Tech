@@ -32,6 +32,13 @@ def _entree(recommandee=False, accroche="Une accroche.", **kwargs):
     return Entree(item=_item(**kwargs), accroche=accroche, recommandee=recommandee)
 
 
+def _articles(html: str) -> str:
+    """Le balisage des seules entrées. La page porte d'autres liens que les
+    leurs (pied de page, depuis le 2026-10-08) : les tests qui vérifient
+    qu'une entrée n'émet *aucun* lien doivent regarder l'entrée, pas la page."""
+    return "\n".join(re.findall(r'<article class="entree">.*?</article>', html, re.S))
+
+
 def test_rendre_produit_les_trois_sections_dans_l_ordre():
     entrees = [
         _entree(guid="c", registre="pour_le_metier", titre="C"),
@@ -92,7 +99,7 @@ def test_rendre_marque_l_entree_recommandee():
     # L'entrée recommandée tient seule la « une » depuis l'audit du
     # 2026-09-22 : sortie de sa section et coiffée d'une mention dédiée, au
     # lieu de porter un simple badge au milieu des autres.
-    assert html.count('<section class="une ') == 1
+    assert html.count('<section class="une"') == 1
     assert html.count('<p class="une-mention">') == 1
     # Et elle n'est pas rendue deux fois : une « une » dupliquée dans sa
     # section se lirait comme un doublon, pas comme une mise en avant.
@@ -130,7 +137,7 @@ def test_rendre_url_vide_n_emet_aucun_lien():
 
     html = rendre(entrees, DATE_GEN)
 
-    assert "<a href=" not in html
+    assert "<a href=" not in _articles(html)
 
 
 def test_rendre_url_a_schema_javascript_n_emet_aucun_lien():
@@ -142,8 +149,8 @@ def test_rendre_url_a_schema_javascript_n_emet_aucun_lien():
 
     html = rendre(entrees, DATE_GEN)
 
-    assert "<a href=" not in html
-    assert "javascript:" not in html
+    assert "<a href=" not in _articles(html)
+    assert "javascript:" not in html  # nulle part, pas seulement dans l'entrée
 
 
 def test_rendre_url_a_schema_data_n_emet_aucun_lien():
@@ -151,7 +158,7 @@ def test_rendre_url_a_schema_data_n_emet_aucun_lien():
 
     html = rendre(entrees, DATE_GEN)
 
-    assert "<a href=" not in html
+    assert "<a href=" not in _articles(html)
 
 
 def test_rendre_url_a_schema_javascript_en_majuscules_n_emet_aucun_lien():
@@ -161,7 +168,7 @@ def test_rendre_url_a_schema_javascript_en_majuscules_n_emet_aucun_lien():
 
     html = rendre(entrees, DATE_GEN)
 
-    assert "<a href=" not in html
+    assert "<a href=" not in _articles(html)
 
 
 def test_rendre_url_https_reste_cliquable():
@@ -399,11 +406,13 @@ def test_rendre_recapitulatif_sante_contient_les_marqueurs_et_chaque_source():
     assert fragment.startswith(RECAPITULATIF_SANTE_DEBUT)
     assert fragment.endswith(RECAPITULATIF_SANTE_FIN)
     assert "src-1" in fragment
-    assert "suspecte" in fragment
+    # États nommés pour un lecteur depuis le 2026-10-08, plus l'identifiant
+    # de base de données (« en_sommeil »).
+    assert "à vérifier" in fragment
     assert "45 jour" in fragment
     assert "src-2" in fragment
-    assert "en_sommeil" in fragment
-    assert "2 source" in fragment
+    assert "en sommeil" in fragment and "en_sommeil" not in fragment
+    assert "2 sources à surveiller" in fragment
 
 
 def test_rendre_recapitulatif_sante_echappe_le_contenu():
@@ -461,7 +470,10 @@ def test_rendre_a_decouvrir_contient_les_marqueurs_id_justification_et_lien():
     assert fragment.endswith(A_DECOUVRIR_FIN)
     assert "ma-source" in fragment
     assert "Une raison précise." in fragment
-    assert 'href="https://exemple.test/flux"' in fragment
+    # Sans `site` déclaré : racine du domaine, jamais le flux XML lui-même,
+    # illisible dans un navigateur (2026-10-08).
+    assert 'href="https://exemple.test/"' in fragment
+    assert "/flux" not in fragment
 
 
 def test_rendre_a_decouvrir_echappe_le_contenu():
@@ -622,3 +634,81 @@ def test_rendre_markdown_affiche_la_source_et_la_date():
     assert "DataGen" in md
     assert "Podcast" in md
     assert "28 août 2026" in md
+
+
+# --- 2026-10-08 : panneaux et entrées pensés pour le lecteur -------------
+
+
+def test_rendre_a_decouvrir_lie_le_site_declare_et_affiche_le_nom():
+    from types import SimpleNamespace
+    from veille.config import SourceConfig
+    from veille.render import rendre_a_decouvrir
+
+    candidat = SimpleNamespace(
+        source=SourceConfig(id="hamel-dev", type="rss", url="https://hamel.dev/index.xml",
+                            langue="en", registre="apprendre", nom="Hamel Husain"),
+        justification="Evals de LLM.",
+        site="https://hamel.dev",
+    )
+
+    fragment = rendre_a_decouvrir(candidat)
+
+    assert 'href="https://hamel.dev"' in fragment
+    assert "Hamel Husain" in fragment
+    assert "index.xml" not in fragment
+
+
+def test_rendre_recapitulatif_sante_prefere_le_nom_lisible():
+    from veille.health import SourceASurveiller
+    from veille.render import rendre_recapitulatif_sante
+
+    fragment = rendre_recapitulatif_sante(
+        [SourceASurveiller(source_id="hf-daily-papers", etat="suspecte", raison="r", nom="HF Daily Papers")]
+    )
+
+    assert "HF Daily Papers" in fragment
+    assert "1 source à surveiller" in fragment
+
+
+def test_une_accroche_qui_repete_le_titre_n_est_pas_affichee_deux_fois():
+    """Repli d'`enrichir()` sans LLM : l'accroche vaut le titre. En production,
+    du 18 septembre au 8 octobre 2026, chaque titre apparaissait deux fois."""
+    html = rendre([_entree(titre="Un titre", accroche="Un  titre")], DATE_GEN)
+
+    assert html.count("Un titre") == 1
+    assert 'class="entree-accroche"' not in html
+
+
+def test_une_release_porte_le_nom_du_projet():
+    """« v0.40.0 » seul ne dit rien sur la page ; « Ollama v0.40.0 », si."""
+    from veille.config import SourceConfig
+
+    sources = {"s": SourceConfig(id="s", type="rss", url="u", langue="en",
+                                 registre="apprendre", nom="Ollama", format="release")}
+
+    html = rendre([_entree(titre="Release: v0.40.0")], DATE_GEN, sources)
+
+    assert "Ollama v0.40.0" in html
+    assert "Release:" not in html
+
+
+def test_rendre_annonce_le_temps_de_lecture_et_le_nombre_de_sources():
+    html = rendre([_entree(titre="T", accroche="Une accroche.")], DATE_GEN)
+
+    assert "<strong>1 min</strong> de lecture" in html
+    assert "<strong>1</strong> source<" in html
+
+
+def test_rendre_reserve_les_emplacements_des_panneaux():
+    """Bandeau d'échec sous le titre, « À découvrir » et santé en bas (UJ-2)."""
+    from veille.render import (
+        EMPLACEMENT_A_DECOUVRIR,
+        EMPLACEMENT_BANDEAU_ECHEC,
+        EMPLACEMENT_RECAPITULATIF_SANTE,
+    )
+
+    html = rendre([_entree(titre="T")], DATE_GEN)
+
+    assert html.index(EMPLACEMENT_BANDEAU_ECHEC) < html.index('class="entree-titre"')
+    assert html.index('class="entree-titre"') < html.index(EMPLACEMENT_A_DECOUVRIR)
+    assert html.index(EMPLACEMENT_A_DECOUVRIR) < html.index(EMPLACEMENT_RECAPITULATIF_SANTE)

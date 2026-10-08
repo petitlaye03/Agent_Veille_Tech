@@ -1,10 +1,10 @@
 {#-
   Archive Markdown datée (FR-10, Story 1.9).
 
-  Enrichie par l'audit du 2026-09-22 : la source et la date de publication y
-  manquaient autant que sur la page HTML, alors que FR-7 les exige (« Chaque
-  Entrée affiche sa Source ») et que l'archive est précisément ce qu'on
-  relit des mois plus tard, quand plus rien ne permet de resituer un article.
+  Source et date ajoutées par l'audit du 2026-09-22 (FR-7) ; titres de
+  release lisibles et accroche masquée quand elle ne fait que répéter le
+  titre depuis le 2026-10-08 — mêmes règles que la page, portées par
+  `render.EntreeRendue`.
 
   Échappement Markdown **explicite** via `| markdown_safe` (jamais
   l'autoescaping HTML, cf. `render._environnement_jinja_markdown`) sur tout
@@ -15,21 +15,16 @@
 _Généré le {{ date_generation.strftime("%d/%m/%Y à %H:%M") }} (heure de Dakar)_
 {% if digest_vide %}
 Rien à signaler ce jour-là — retour le lendemain.
-{%- else %}
-{% for registre, libelle, entrees_section in sections %}
-{%- if entrees_section %}
+{% else %}
+{%- for registre, libelle, entrees_section in sections if entrees_section %}
 
 ## {{ libelle | markdown_safe }}
 {% for e in entrees_section %}
-{%- set titre = e.titre | markdown_safe -%}
+{%- set titre = e.titre | markdown_safe %}
 - {% if e.recommandee %}★ **À NE PAS MANQUER** — {% endif -%}
-{%- if e.url -%}
-[{{ titre }}](<{{ e.url }}>)
-{%- else -%}
-{{ titre }}
-{%- endif %} — {{ e.accroche | markdown_safe }}
+{%- if e.url %}[{{ titre }}](<{{ e.url }}>){% else %}{{ titre }}{% endif -%}
+{%- if e.accroche_affichee %} — {{ e.accroche_affichee | markdown_safe }}{% endif %}
   _{{ e.nom_source | markdown_safe }} · {{ e.libelle_format | markdown_safe }} · {{ e.date_lisible }}_
-{% endfor %}
-{%- endif %}
 {%- endfor %}
+{% endfor %}
 {%- endif %}

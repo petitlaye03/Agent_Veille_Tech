@@ -34,6 +34,30 @@ LIBELLES_REGISTRE: dict[str, str] = {
     "pour_le_metier": "Pour le métier",
 }
 
+# L'intention de chaque registre, telle que le PRD la formule (§1 : « apprendre,
+# suivre l'actualité, rester employable ») — affichée sous le titre de section
+# (2026-10-08) pour qu'on sache, avant de lire, pourquoi ces entrées-là sont ici.
+INTENTIONS_REGISTRE: dict[str, str] = {
+    "apprendre": "Pour progresser",
+    "ce_qui_bouge": "L'actualité du secteur",
+    "pour_le_metier": "Pour rester employable",
+}
+
+# Archives des digests précédents (FR-10), lisibles dans l'interface de
+# GitHub qui met le Markdown en forme — GitHub Pages, lui, servirait les
+# `.md` en texte brut. Même dépôt que `publish.PUBLISH_REPO` ; dupliqué ici
+# plutôt qu'importé, `publish.py` important déjà ce module (import circulaire).
+LIEN_ARCHIVES = "https://github.com/petitlaye03/Agent_Veille_Tech/tree/main/site/archive"
+
+# Mots par minute retenus pour l'estimation du temps de lecture de la page —
+# vitesse de lecture courante à l'écran, en français. Ne mesure que la page
+# elle-même (titres et accroches), jamais les articles d'origine.
+MOTS_PAR_MINUTE = 200
+
+# « Release: », « Patch release » … en tête des titres de release GitHub :
+# retirés à l'affichage, le format est déjà dit par la ligne de métadonnées.
+_PREFIXE_RELEASE = re.compile(r"^\s*(?:patch\s+)?release\s*:?\s*", re.IGNORECASE)
+
 # Libellé et pictogramme de chaque format de contenu (audit du 2026-09-22).
 # Un épisode de podcast de 50 minutes et une brève de 2 minutes étaient
 # rendus à l'identique : sur une page dont toute la promesse est « 5 minutes
@@ -162,6 +186,24 @@ class EntreeRendue:
         return self.entree.accroche
 
     @property
+    def accroche_affichee(self) -> str | None:
+        """L'accroche, sauf quand elle ne fait que répéter le titre.
+
+        C'est le repli documenté d'`enrichir()` quand aucun LLM ne répond :
+        l'accroche prend la valeur du titre. Du 18 septembre au 8 octobre
+        2026, faute de secret configuré en production, la page publiée
+        affichait ainsi chaque titre deux fois de suite (2026-10-08).
+        """
+        texte = (self.entree.accroche or "").strip()
+        if not texte:
+            return None
+        def _normaliser(valeur: str) -> str:
+            return " ".join(valeur.split()).casefold()
+        if _normaliser(texte) in {_normaliser(self.titre), _normaliser(self.entree.item.titre or "")}:
+            return None
+        return texte
+
+    @property
     def est_ancienne(self) -> bool:
         return self.age_jours > SEUIL_AGE_SIGNALE
 
@@ -190,9 +232,17 @@ def _preparer_entree(
 
     age, age_jours = _libelle_age(entree.item.date_publication, maintenant)
 
+    titre = entree.item.titre or entree.accroche
+    if format_declare == "release" and entree.item.titre:
+        # Un titre de release se réduit souvent au numéro (« v0.40.0 ») :
+        # sans le nom du projet, la ligne ne dit rien (2026-10-08).
+        titre = _PREFIXE_RELEASE.sub("", entree.item.titre).strip() or entree.item.titre
+        if nom.casefold() not in titre.casefold():
+            titre = f"{nom} {titre}"
+
     return EntreeRendue(
         entree=entree,
-        titre=entree.item.titre or entree.accroche,
+        titre=titre,
         url=_url_surs(entree.item.url),
         nom_source=nom,
         format=format_declare,
@@ -404,6 +454,12 @@ def rendre(
     total = sum(len(entrees_section) for _, _, entrees_section in sections) + (
         1 if une is not None else 0
     )
+    affichees = [e for _, _, entrees_section in sections for e in entrees_section]
+    if une is not None:
+        affichees.append(une)
+    nb_sources = len({e.nom_source for e in affichees})
+    mots = sum(len(e.titre.split()) + len((e.accroche_affichee or "").split()) for e in affichees)
+    lecture_minutes = max(1, round(mots / MOTS_PAR_MINUTE)) if affichees else 0
 
     environnement = _environnement_jinja()
     template = environnement.get_template("digest.html.j2")
@@ -411,6 +467,13 @@ def rendre(
         sections=sections,
         une=une,
         total=total,
+        nb_sources=nb_sources,
+        lecture_minutes=lecture_minutes,
+        intentions=INTENTIONS_REGISTRE,
+        lien_archives=LIEN_ARCHIVES,
+        emplacement_bandeau_echec=EMPLACEMENT_BANDEAU_ECHEC,
+        emplacement_a_decouvrir=EMPLACEMENT_A_DECOUVRIR,
+        emplacement_recapitulatif_sante=EMPLACEMENT_RECAPITULATIF_SANTE,
         date_generation=date_generation,
         date_lisible=_date_lisible(date_generation, avec_jour=True),
         digest_vide=digest_vide,
@@ -444,24 +507,40 @@ def rendre_markdown(
 
 
 # Habillage commun aux trois panneaux injectés après coup (bandeau d'échec,
-# récapitulatif de santé, « À découvrir »). Aligné sur le langage visuel du
-# gabarit lors de la refonte du 2026-09-22 — rayon de 3 px, filet d'accent à
-# gauche, mention en petites capitales — mais écrit en styles **en ligne**,
-# jamais en classes : ces fragments sont insérés dans des pages déjà
-# publiées, dont la feuille de style est figée au moment où elles ont été
-# rendues. Une classe ajoutée ici n'existerait pas dans ces pages-là.
+# récapitulatif de santé, « À découvrir »), aligné sur le gabarit refondu le
+# 2026-10-08. Écrit en styles **en ligne**, jamais en classes : ces fragments
+# sont insérés dans des pages déjà publiées, dont la feuille de style est
+# figée au moment de leur rendu — une classe ajoutée ici n'existerait pas
+# dans ces pages-là. Les couleurs passent par des variables CSS, avec une
+# valeur de repli pour les pages antérieures qui ne les définissent pas.
 def _cadre_panneau(fond: str, texte: str) -> str:
     return (
-        f"background:var({fond});color:var({texte});"
-        f"border-left:3px solid currentColor;border-radius:3px;"
-        "padding:14px 16px;margin:20px 0 0;font-size:0.9rem;line-height:1.55;"
+        f"background:var({fond});color:var({texte});border-radius:12px;"
+        "padding:16px 18px;margin:0 0 12px;font-size:0.9rem;line-height:1.55;"
     )
 
 
 _MENTION_PANNEAU = (
-    "display:block;margin:0 0 6px;font-size:0.68rem;font-weight:700;"
-    "letter-spacing:0.14em;text-transform:uppercase;opacity:0.85;"
+    "display:block;margin:0 0 6px;font-size:0.72rem;font-weight:600;"
+    "letter-spacing:0.06em;text-transform:uppercase;opacity:0.8;"
 )
+
+# États de santé tels qu'un lecteur les nomme — `en_sommeil` est un
+# identifiant de base de données, pas une phrase (2026-10-08).
+LIBELLES_ETAT: dict[str, str] = {
+    "active": "active",
+    "suspecte": "à vérifier",
+    "en_sommeil": "en sommeil",
+}
+
+
+# Emplacements réservés par le gabarit à chacun des trois panneaux injectés
+# après coup (2026-10-08) — voir `publish._inserer_fragment`. Des commentaires
+# HTML, donc invisibles, et distincts des marqueurs DEBUT/FIN : ceux-ci
+# délimitent un panneau présent, ceux-là désignent où il doit apparaître.
+EMPLACEMENT_BANDEAU_ECHEC = "<!-- EMPLACEMENT:BANDEAU-ECHEC -->"
+EMPLACEMENT_A_DECOUVRIR = "<!-- EMPLACEMENT:A-DECOUVRIR -->"
+EMPLACEMENT_RECAPITULATIF_SANTE = "<!-- EMPLACEMENT:RECAPITULATIF-SANTE -->"
 
 
 # Marqueurs stables délimitant le bandeau d'échec dans le HTML publié
@@ -498,7 +577,7 @@ def rendre_bandeau_echec(date_echec: date) -> str:
     """
     return (
         f"{BANDEAU_ECHEC_DEBUT}\n"
-        f'<div style="{_cadre_panneau("--bandeau-echec-bg", "--bandeau-echec-fg")}">\n'
+        f'<div role="status" style="{_cadre_panneau("--bandeau-echec-bg", "--bandeau-echec-fg")}">\n'
         f'<strong style="{_MENTION_PANNEAU}">Pas de mise à jour cette nuit</strong>\n'
         f"La génération du {date_echec.strftime('%d/%m/%Y')} a échoué pour un "
         "problème technique. Le digest ci-dessous reste le plus récent "
@@ -550,19 +629,20 @@ def rendre_recapitulatif_sante(sources: list) -> str:
             "que d'en publier un vide (voir publish.publier_recapitulatif_sante)."
         )
     lignes_html = "\n".join(
-        "<li><strong>{id}</strong> — {etat} : {raison}</li>".format(
-            id=html.escape(s.source_id),
-            etat=html.escape(s.etat),
+        '<li style="margin:2px 0;"><strong>{nom}</strong> — {etat} : {raison}</li>'.format(
+            nom=html.escape((getattr(s, "nom", "") or "").strip() or s.source_id),
+            etat=html.escape(LIBELLES_ETAT.get(s.etat, s.etat)),
             raison=html.escape(s.raison),
         )
         for s in sources
     )
+    pluriel = "s" if len(sources) > 1 else ""
     return (
         f"{RECAPITULATIF_SANTE_DEBUT}\n"
         f'<div style="{_cadre_panneau("--recapitulatif-bg", "--recapitulatif-fg")}">\n'
         f'<strong style="{_MENTION_PANNEAU}">'
-        f"{len(sources)} source(s) à surveiller</strong>\n"
-        f'<ul style="margin:0;padding-left:1.15rem;">\n{lignes_html}\n</ul>\n'
+        f"{len(sources)} source{pluriel} à surveiller</strong>\n"
+        f'<ul style="margin:0;padding-left:1.1rem;">\n{lignes_html}\n</ul>\n'
         "</div>\n"
         f"{RECAPITULATIF_SANTE_FIN}"
     )
@@ -611,20 +691,27 @@ def rendre_a_decouvrir(candidat) -> str:
             "existant plutôt que d'en publier un vide (voir "
             "publish.publier_a_decouvrir)."
         )
-    url_source = candidat.source.url or ""
-    url_sure = _url_surs(url_source)
-    lien_html = (
-        f'<a href="{html.escape(url_sure)}">{html.escape(url_source)}</a>'
-        if url_sure
-        else html.escape(url_source)
+    nom = (getattr(candidat.source, "nom", "") or "").strip() or candidat.source.id
+    lien = _url_surs(getattr(candidat, "site", "") or "") or _racine_du_site(candidat.source.url)
+    titre_html = (
+        f'<a href="{html.escape(lien)}" rel="noopener noreferrer" '
+        f'style="color:inherit;font-weight:600;">{html.escape(nom)}</a>'
+        if lien
+        else f'<span style="font-weight:600;">{html.escape(nom)}</span>'
     )
     return (
         f"{A_DECOUVRIR_DEBUT}\n"
         f'<div style="{_cadre_panneau("--a-decouvrir-bg", "--a-decouvrir-fg")}">\n'
         f'<strong style="{_MENTION_PANNEAU}">À découvrir cette semaine</strong>\n'
-        f'<span style="font-weight:700;">{html.escape(candidat.source.id)}</span> — '
-        f"{html.escape(candidat.justification)}\n"
-        f'<p style="margin:6px 0 0;font-size:0.82rem;opacity:0.85;">{lien_html}</p>\n'
+        f"{titre_html} — {html.escape(candidat.justification)}\n"
         "</div>\n"
         f"{A_DECOUVRIR_FIN}"
     )
+
+
+def _racine_du_site(url_flux: str) -> str | None:
+    """Racine du domaine d'un flux, pour un lien lisible dans un navigateur
+    quand le candidat ne déclare pas de `site` (2026-10-08). Le panneau
+    pointait jusque-là vers le flux XML lui-même (« hamel.dev/index.xml »)."""
+    correspondance = re.match(r"^(https?://[^/\s<>\"]+)", url_flux or "", re.IGNORECASE)
+    return _url_surs(correspondance.group(1) + "/") if correspondance else None

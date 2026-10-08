@@ -216,6 +216,78 @@ def filtrer_par_fraicheur(
     )
 
 
+# Version dans un titre de release GitHub, et son éventuel suffixe de
+# préversion (2026-10-08). Formes réellement observées sur les flux du socle :
+# « v0.31.0 », « v0.31.0rc5: [Misc] … », « Release v5.19.0 », « Release
+# 5.18.0 », « Patch release: v5.15.1 », « v0.40.0-rc6: model: … ».
+_VERSION_RELEASE = re.compile(
+    r"v?(?P<majeure>\d+)\.(?P<mineure>\d+)(?:\.(?P<correctif>\d+))?"
+    r"(?P<preversion>[-.]?(?:rc|alpha|beta|dev|pre|preview|nightly|a|b)\.?\d*)?",
+    re.IGNORECASE,
+)
+
+
+@dataclass(frozen=True)
+class RapportReleases:
+    """Préversions et correctifs écartés, par source — même patron que
+    `RapportFiltrageSignal`."""
+
+    ecartes_par_source: dict[str, int] = field(default_factory=dict)
+
+    @property
+    def total_ecartes(self) -> int:
+        return sum(self.ecartes_par_source.values())
+
+    def resume(self) -> str:
+        if not self.total_ecartes:
+            return "Releases : aucune préversion ni correctif écarté."
+        return (
+            f"Releases : {self.total_ecartes} préversion(s)/correctif(s) écarté(s) — "
+            f"{_ventilation(self.ecartes_par_source)}"
+        )
+
+
+def est_release_notable(titre: str) -> bool:
+    """Vrai si `titre` annonce une version stable **mineure ou majeure**.
+
+    Écarte les préversions (`rc`, `alpha`, `beta`, `dev`…) et les correctifs
+    (`x.y.z` avec `z > 0`). Mesuré le 2026-10-08 sur les flux du socle :
+    Ollama avait publié sept `-rc` et deux correctifs pour une seule version
+    mineure, vLLM cinq `rc` pour la sienne — une page de veille qui les
+    reprend n'est plus un tri, c'est un journal de compilation. Une version
+    mineure, elle, porte presque toujours une nouveauté qui se raconte.
+
+    Un titre sans numéro de version reconnaissable est **conservé** : faute
+    de pouvoir établir que c'est du bruit, on ne l'écarte pas — même
+    principe que `filtrer_par_signal` face à un signal absent.
+    """
+    correspondance = _VERSION_RELEASE.search(titre or "")
+    if correspondance is None:
+        return True
+    if correspondance.group("preversion"):
+        return False
+    correctif = correspondance.group("correctif")
+    return correctif is None or int(correctif) == 0
+
+
+def filtrer_releases(
+    items: list[Item], sources: dict[str, SourceConfig]
+) -> tuple[list[Item], RapportReleases]:
+    """Ne garde, pour les sources déclarées `format: release`, que les
+    versions notables (`est_release_notable`). Les items de toute autre
+    source passent sans être examinés : un article dont le titre contient
+    « v2.1 » n'est pas une release."""
+    retenus: list[Item] = []
+    ecartes: Counter[str] = Counter()
+    for item in items:
+        source = sources.get(item.source_id)
+        if source is not None and source.format == "release" and not est_release_notable(item.titre):
+            ecartes[item.source_id] += 1
+            continue
+        retenus.append(item)
+    return retenus, RapportReleases(ecartes_par_source=dict(ecartes))
+
+
 def filtrer_par_signal(
     items: list[Item], sources: dict[str, SourceConfig]
 ) -> tuple[list[Item], RapportFiltrageSignal]:

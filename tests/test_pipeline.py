@@ -1016,7 +1016,8 @@ def test_controler_fraicheur_publie_le_recapitulatif_des_sources_a_surveiller(tm
 
     html_publie = base64.b64decode(corps_publie).decode("utf-8")
     assert "test-source" in html_publie
-    assert "en_sommeil" in html_publie
+    # Libellé lisible depuis le 2026-10-08 (« en sommeil », pas l'identifiant).
+    assert "en sommeil" in html_publie
 
 
 def test_controler_fraicheur_n_echoue_pas_si_la_publication_du_recapitulatif_echoue(tmp_path, monkeypatch):

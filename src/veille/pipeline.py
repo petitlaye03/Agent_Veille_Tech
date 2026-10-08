@@ -143,26 +143,9 @@ def executer(
                 quotas_path,
                 store_conn=store_conn,
             )
-            # Le profil atteint désormais la **rédaction**, pas seulement le
-            # tri (audit du 2026-09-22) : `enrich/llm.py` écrivait ses
-            # accroches sans rien savoir du lecteur. Rechargé ici plutôt que
-            # remonté depuis `collecter()` — `ResultatCollecte` n'expose que
-            # `profil_neutre`, un booléen, et lui faire porter le profil
-            # entier couplerait la collecte au rendu pour un seul appelant.
-            # `charger_profil` ne lève jamais (profil neutre si illisible).
-            profil_redaction = charger_profil(
-                collect.DEFAULT_PROFIL_PATH if profil_path is None else profil_path
-            )
-            entrees = enrichir(
-                resultat_collecte.items, client=llm_client, profil=profil_redaction
-            )
-
-            ponderations = charger_ponderations(scoring_path_resolu)
-            entrees = marquer_recommandation(entrees, resultat_collecte.resultats_repartis, ponderations)
-
-            maintenant = datetime.now(timezone.utc)
-
-            # Index des sources passé au rendu (audit du 2026-09-22) : la
+            # Index des sources passé à l'enrichissement et au rendu (audit
+            # du 2026-09-22, chargé avant `enrichir` depuis le 2026-10-08 pour
+            # que le LLM connaisse aussi le nom de chaque source) : la
             # page et l'archive affichent désormais le nom lisible de la
             # source et la nature du contenu, deux informations qui ne
             # vivent que dans `sources.yaml` (AD-3) — `Item` ne porte que
@@ -178,6 +161,29 @@ def executer(
                     sources_path_resolu,
                 )
                 sources_affichage = {}
+
+            # Le profil atteint désormais la **rédaction**, pas seulement le
+            # tri (audit du 2026-09-22) : `enrich/llm.py` écrivait ses
+            # accroches sans rien savoir du lecteur. Rechargé ici plutôt que
+            # remonté depuis `collecter()` — `ResultatCollecte` n'expose que
+            # `profil_neutre`, un booléen, et lui faire porter le profil
+            # entier couplerait la collecte au rendu pour un seul appelant.
+            # `charger_profil` ne lève jamais (profil neutre si illisible).
+            profil_redaction = charger_profil(
+                collect.DEFAULT_PROFIL_PATH if profil_path is None else profil_path
+            )
+            entrees = enrichir(
+                resultat_collecte.items,
+                client=llm_client,
+                profil=profil_redaction,
+                noms_sources={i: s.nom for i, s in sources_affichage.items() if s.nom},
+            )
+
+            ponderations = charger_ponderations(scoring_path_resolu)
+            entrees = marquer_recommandation(entrees, resultat_collecte.resultats_repartis, ponderations)
+
+            maintenant = datetime.now(timezone.utc)
+
 
             html = rendre(entrees, maintenant, sources_affichage)
             page_ok = publier(html, client=publish_client)

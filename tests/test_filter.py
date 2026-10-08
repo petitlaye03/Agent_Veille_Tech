@@ -1014,3 +1014,57 @@ def test_charger_quotas_max_par_source_absent_vaut_zero(tmp_path):
     chemin.write_text("quotas:\n  apprendre: 3\n", encoding="utf-8")
 
     assert charger_quotas(chemin).max_par_source == 0
+
+
+# --- 2026-10-08 : releases notables seulement ---------------------------
+# Titres réellement observés sur les flux du socle ce jour-là.
+
+import pytest  # noqa: E402
+
+from veille.filter import est_release_notable, filtrer_releases  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    "titre",
+    ["v0.31.0", "Release v5.19.0", "Release 5.18.0", "v0.40.0", "v2.0", "Release: v5.16.0"],
+)
+def test_une_version_mineure_ou_majeure_stable_est_notable(titre):
+    assert est_release_notable(titre) is True
+
+
+@pytest.mark.parametrize(
+    "titre",
+    [
+        "v0.31.0rc5: [Misc] Add Transformers version upper bound",
+        "v0.31.1rc0: [Metrics] Expose cached prompt tokens",
+        "v0.40.0-rc6: model: add multimodal embeddings",
+        "v1.0.0-beta.2",
+        "v0.40.1",
+        "Patch release: v5.15.1",
+        "Release v5.16.1",
+    ],
+)
+def test_une_preversion_ou_un_correctif_n_est_pas_notable(titre):
+    assert est_release_notable(titre) is False
+
+
+def test_un_titre_sans_version_est_conserve():
+    """Faute de pouvoir établir que c'est du bruit, on ne l'écarte pas."""
+    assert est_release_notable("Nouvelle version majeure du moteur") is True
+    assert est_release_notable("") is True
+
+
+def test_filtrer_releases_n_examine_que_les_sources_de_format_release():
+    """Un article dont le titre contient « v0.40.1 » n'est pas une release."""
+    sources = _sources(depot={"format": "release"}, blog={"format": "article"})
+    items = [
+        _item(source_id="depot", guid="a", titre="v0.40.1"),
+        _item(source_id="depot", guid="b", titre="v0.40.0"),
+        _item(source_id="blog", guid="c", titre="Ce qui change dans v0.40.1"),
+    ]
+
+    retenus, rapport = filtrer_releases(items, sources)
+
+    assert [i.guid for i in retenus] == ["b", "c"]
+    assert rapport.ecartes_par_source == {"depot": 1}
+    assert "1 préversion(s)/correctif(s)" in rapport.resume()

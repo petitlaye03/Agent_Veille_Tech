@@ -7,6 +7,7 @@ via `_ClientSimule` (voir Dev Notes de la story pour le patron).
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+import dataclasses
 import anthropic
 import openai
 import pytest
@@ -692,3 +693,64 @@ def test_enrichir_sans_profil_ne_change_rien():
 
     assert entrees[0].accroche == "Une accroche."
     assert client.messages.derniere_requete["system"] == llm._PROMPT_SYSTEME
+
+
+# --- 2026-10-08 : le nom de la source dans le prompt ---------------------
+
+
+def test_generer_accroche_donne_le_nom_de_la_source_au_modele():
+    """Un titre de release se réduit souvent à « v0.40.0 » : sans le nom du
+    projet, le modèle ne peut que rester vague."""
+    client = _ClientSimule(texte="Une accroche.")
+
+    llm.generer_accroche(_make_item(), client, nom_source="Ollama")
+
+    contenu = client.messages.derniere_requete["messages"][0]["content"]
+    assert contenu.startswith("Source : Ollama")
+
+
+def test_enrichir_associe_chaque_item_au_nom_de_sa_source():
+    client = _ClientSimule(texte="Une accroche.")
+    item = _make_item()
+
+    llm.enrichir([item], client, noms_sources={item.source_id: "Hugging Face"})
+
+    assert "Source : Hugging Face" in client.messages.derniere_requete["messages"][0]["content"]
+
+
+def test_sans_nom_de_source_le_prompt_reste_inchange():
+    client = _ClientSimule(texte="Une accroche.")
+
+    llm.generer_accroche(_make_item(), client)
+
+    assert client.messages.derniere_requete["messages"][0]["content"].startswith("Titre : ")
+
+
+# --- 2026-10-08 : ne rien inventer quand il n'y a que le titre -----------
+
+
+def test_sans_extrait_le_prompt_interdit_d_inventer():
+    """Run réel : privé de texte, le modèle avait inventé le contenu d'un
+    article de Hacker News à partir de son seul titre."""
+    client = _ClientSimule(texte="Une accroche.")
+    item = dataclasses.replace(_make_item(), contenu_brut="")
+
+    llm.generer_accroche(item, client)
+
+    assert llm._CONSIGNE_SANS_EXTRAIT in client.messages.derniere_requete["messages"][0]["content"]
+
+
+def test_un_extrait_substantiel_ne_declenche_pas_la_consigne():
+    client = _ClientSimule(texte="Une accroche.")
+    item = dataclasses.replace(_make_item(), contenu_brut="Une phrase de contenu réel. " * 10)
+
+    llm.generer_accroche(item, client)
+
+    assert llm._CONSIGNE_SANS_EXTRAIT not in client.messages.derniere_requete["messages"][0]["content"]
+
+
+def test_le_html_est_retire_de_l_extrait():
+    """Les notes de release GitHub arrivent en HTML : des balises facturées
+    et inutiles au modèle."""
+    assert llm._texte_brut("<p>Ajoute le <b>support</b> MLX&nbsp;&amp; CUDA</p>") == "Ajoute le support MLX & CUDA"
+    assert llm._texte_brut("") == ""
